@@ -22,53 +22,46 @@ export default function SignInScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { signIn, errors, fetchStatus } = useSignIn();
+  const { signIn, setActive, isLoaded } = useSignIn();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [verifyStep, setVerifyStep] = useState(false);
-  const [code, setCode] = useState("");
-
-  const handleSignIn = async () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    const { error } = await signIn.password({ emailAddress: email, password });
-    if (error) return;
-    if (signIn.status === "complete") {
-      await signIn.finalize({
-        navigate: ({ decorateUrl }) => {
-          const url = decorateUrl("/");
-          if (url.startsWith("http")) {
-            // no-op on native
-          } else {
-            router.replace(url as any);
-          }
-        },
-      });
-    } else if (signIn.status === "needs_client_trust") {
-      await signIn.mfa.sendEmailCode();
-      setVerifyStep(true);
-    }
-  };
-
-  const handleVerify = async () => {
-    await signIn.mfa.verifyEmailCode({ code });
-    if (signIn.status === "complete") {
-      await signIn.finalize({
-        navigate: ({ decorateUrl }) => {
-          const url = decorateUrl("/");
-          router.replace(url as any);
-        },
-      });
-    }
-  };
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const topPad = Platform.OS === "web" ? 67 : insets.top;
   const bottomPad = Platform.OS === "web" ? 34 : insets.bottom;
 
-  const fieldError = (field: string) => {
-    const e = errors?.fields as Record<string, { message: string }> | undefined;
-    return e?.[field]?.message;
+  const handleSignIn = async () => {
+    if (!isLoaded || !signIn || loading) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setLoading(true);
+    setError(null);
+
+    try {
+      const result = await signIn.create({
+        strategy: "password",
+        identifier: email,
+        password,
+      });
+
+      if (result.status === "complete") {
+        await setActive({ session: result.createdSessionId });
+        router.replace("/(home)");
+      } else {
+        setError("Sign-in could not be completed. Please try again.");
+      }
+    } catch (e: any) {
+      const msg =
+        e?.errors?.[0]?.longMessage ??
+        e?.errors?.[0]?.message ??
+        e?.message ??
+        "Sign-in failed. Check your credentials.";
+      setError(msg);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -95,148 +88,99 @@ export default function SignInScreen() {
           </LinearGradient>
 
           <Text style={[styles.title, { color: colors.foreground }]}>
-            {verifyStep ? "Check your email" : "Welcome back"}
+            Welcome back
           </Text>
           <Text style={[styles.subtitle, { color: colors.mutedForeground }]}>
-            {verifyStep
-              ? "Enter the verification code we sent you"
-              : "Sign in to create AI videos"}
+            Sign in to create AI videos
           </Text>
 
-          {verifyStep ? (
-            <>
-              <View style={styles.fieldGroup}>
-                <TextInput
-                  style={[
-                    styles.input,
-                    {
-                      backgroundColor: colors.input,
-                      color: colors.foreground,
-                      borderColor: colors.border,
-                    },
-                  ]}
-                  value={code}
-                  onChangeText={setCode}
-                  placeholder="Verification code"
-                  placeholderTextColor={colors.mutedForeground}
-                  keyboardType="numeric"
-                  autoFocus
-                />
-              </View>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.primaryBtn,
-                  { backgroundColor: colors.primary },
-                  (fetchStatus === "fetching" || !code) && { opacity: 0.5 },
-                  pressed && { opacity: 0.85 },
+          <View style={styles.fieldGroup}>
+            <Text style={[styles.label, { color: colors.mutedForeground }]}>Email</Text>
+            <TextInput
+              style={[
+                styles.input,
+                {
+                  backgroundColor: colors.input,
+                  color: colors.foreground,
+                  borderColor: colors.border,
+                },
+              ]}
+              value={email}
+              onChangeText={(v) => { setEmail(v); setError(null); }}
+              placeholder="you@example.com"
+              placeholderTextColor={colors.mutedForeground}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+          </View>
+
+          <View style={styles.fieldGroup}>
+            <Text style={[styles.label, { color: colors.mutedForeground }]}>Password</Text>
+            <View>
+              <TextInput
+                style={[
+                  styles.input,
+                  {
+                    backgroundColor: colors.input,
+                    color: colors.foreground,
+                    borderColor: colors.border,
+                    paddingRight: 48,
+                  },
                 ]}
-                onPress={handleVerify}
-                disabled={fetchStatus === "fetching" || !code}
-              >
-                {fetchStatus === "fetching" ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <Text style={styles.btnText}>Verify</Text>
-                )}
-              </Pressable>
-              <Pressable onPress={() => { setVerifyStep(false); setCode(""); }}>
-                <Text style={[styles.link, { color: colors.primary }]}>Back to sign in</Text>
-              </Pressable>
-            </>
-          ) : (
-            <>
-              <View style={styles.fieldGroup}>
-                <Text style={[styles.label, { color: colors.mutedForeground }]}>Email</Text>
-                <TextInput
-                  style={[
-                    styles.input,
-                    {
-                      backgroundColor: colors.input,
-                      color: colors.foreground,
-                      borderColor: fieldError("identifier") ? colors.destructive : colors.border,
-                    },
-                  ]}
-                  value={email}
-                  onChangeText={setEmail}
-                  placeholder="you@example.com"
-                  placeholderTextColor={colors.mutedForeground}
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
-                {fieldError("identifier") && (
-                  <Text style={[styles.errorText, { color: colors.destructive }]}>
-                    {fieldError("identifier")}
-                  </Text>
-                )}
-              </View>
-
-              <View style={styles.fieldGroup}>
-                <Text style={[styles.label, { color: colors.mutedForeground }]}>Password</Text>
-                <View>
-                  <TextInput
-                    style={[
-                      styles.input,
-                      {
-                        backgroundColor: colors.input,
-                        color: colors.foreground,
-                        borderColor: fieldError("password") ? colors.destructive : colors.border,
-                        paddingRight: 48,
-                      },
-                    ]}
-                    value={password}
-                    onChangeText={setPassword}
-                    placeholder="••••••••"
-                    placeholderTextColor={colors.mutedForeground}
-                    secureTextEntry={!showPassword}
-                  />
-                  <Pressable
-                    style={styles.eyeBtn}
-                    onPress={() => setShowPassword((v) => !v)}
-                  >
-                    <Feather
-                      name={showPassword ? "eye-off" : "eye"}
-                      size={18}
-                      color={colors.mutedForeground}
-                    />
-                  </Pressable>
-                </View>
-                {fieldError("password") && (
-                  <Text style={[styles.errorText, { color: colors.destructive }]}>
-                    {fieldError("password")}
-                  </Text>
-                )}
-              </View>
-
+                value={password}
+                onChangeText={(v) => { setPassword(v); setError(null); }}
+                placeholder="••••••••"
+                placeholderTextColor={colors.mutedForeground}
+                secureTextEntry={!showPassword}
+              />
               <Pressable
-                style={({ pressed }) => [
-                  styles.primaryBtn,
-                  { backgroundColor: colors.primary },
-                  (fetchStatus === "fetching" || !email || !password) && { opacity: 0.5 },
-                  pressed && { opacity: 0.85 },
-                ]}
-                onPress={handleSignIn}
-                disabled={fetchStatus === "fetching" || !email || !password}
+                style={styles.eyeBtn}
+                onPress={() => setShowPassword((v) => !v)}
               >
-                {fetchStatus === "fetching" ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <Text style={styles.btnText}>Sign in</Text>
-                )}
+                <Feather
+                  name={showPassword ? "eye-off" : "eye"}
+                  size={18}
+                  color={colors.mutedForeground}
+                />
               </Pressable>
+            </View>
+          </View>
 
-              <View style={styles.switchRow}>
-                <Text style={[styles.switchText, { color: colors.mutedForeground }]}>
-                  No account?{" "}
-                </Text>
-                <Link href="/(auth)/sign-up" asChild>
-                  <Pressable>
-                    <Text style={[styles.link, { color: colors.primary }]}>Create one</Text>
-                  </Pressable>
-                </Link>
-              </View>
-            </>
+          {error && (
+            <View style={[styles.errorBox, { backgroundColor: colors.destructive + "22", borderColor: colors.destructive + "44" }]}>
+              <Feather name="alert-circle" size={14} color={colors.destructive} />
+              <Text style={[styles.errorText, { color: colors.destructive }]}>{error}</Text>
+            </View>
           )}
+
+          <Pressable
+            style={({ pressed }) => [
+              styles.primaryBtn,
+              { backgroundColor: colors.primary },
+              (loading || !email || !password) && { opacity: 0.5 },
+              pressed && { opacity: 0.85 },
+            ]}
+            onPress={handleSignIn}
+            disabled={loading || !email || !password}
+          >
+            {loading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.btnText}>Sign in</Text>
+            )}
+          </Pressable>
+
+          <View style={styles.switchRow}>
+            <Text style={[styles.switchText, { color: colors.mutedForeground }]}>
+              No account?{" "}
+            </Text>
+            <Link href="/(auth)/sign-up" asChild>
+              <Pressable>
+                <Text style={[styles.link, { color: colors.primary }]}>Create one</Text>
+              </Pressable>
+            </Link>
+          </View>
         </ScrollView>
       </KeyboardAvoidingView>
     </View>
@@ -246,10 +190,7 @@ export default function SignInScreen() {
 const styles = StyleSheet.create({
   root: { flex: 1 },
   flex: { flex: 1 },
-  scroll: {
-    paddingHorizontal: 24,
-    alignItems: "stretch",
-  },
+  scroll: { paddingHorizontal: 24, alignItems: "stretch" },
   logoBox: {
     width: 72,
     height: 72,
@@ -272,9 +213,7 @@ const styles = StyleSheet.create({
     marginBottom: 36,
     lineHeight: 22,
   },
-  fieldGroup: {
-    marginBottom: 16,
-  },
+  fieldGroup: { marginBottom: 16 },
   label: {
     fontSize: 13,
     fontFamily: "Inter_500Medium",
@@ -288,40 +227,35 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontFamily: "Inter_400Regular",
   },
-  eyeBtn: {
-    position: "absolute",
-    right: 14,
-    top: 17,
+  eyeBtn: { position: "absolute", right: 14, top: 17 },
+  errorBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    marginBottom: 16,
   },
   errorText: {
-    fontSize: 12,
+    fontSize: 13,
     fontFamily: "Inter_400Regular",
-    marginTop: 4,
+    flex: 1,
+    lineHeight: 18,
   },
   primaryBtn: {
     height: 54,
     borderRadius: 14,
     alignItems: "center",
     justifyContent: "center",
-    marginTop: 8,
     marginBottom: 20,
   },
-  btnText: {
-    color: "#fff",
-    fontSize: 16,
-    fontFamily: "Inter_600SemiBold",
-  },
+  btnText: { color: "#fff", fontSize: 16, fontFamily: "Inter_600SemiBold" },
   switchRow: {
     flexDirection: "row",
     justifyContent: "center",
     alignItems: "center",
   },
-  switchText: {
-    fontSize: 14,
-    fontFamily: "Inter_400Regular",
-  },
-  link: {
-    fontSize: 14,
-    fontFamily: "Inter_600SemiBold",
-  },
+  switchText: { fontSize: 14, fontFamily: "Inter_400Regular" },
+  link: { fontSize: 14, fontFamily: "Inter_600SemiBold" },
 });

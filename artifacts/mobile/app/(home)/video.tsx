@@ -1,7 +1,8 @@
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import React, { useRef, useState } from "react";
+import { useVideoPlayer, VideoView } from "expo-video";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Platform,
   Pressable,
@@ -29,9 +30,42 @@ export default function VideoScreen() {
   const [newTopic, setNewTopic] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [scriptExpanded, setScriptExpanded] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [playerError, setPlayerError] = useState<string | null>(null);
 
   const topPad = Platform.OS === "web" ? 67 : insets.top;
   const bottomPad = Platform.OS === "web" ? 34 : insets.bottom;
+
+  const player = useVideoPlayer(video?.videoUrl ?? null, (p) => {
+    p.loop = false;
+    p.muted = false;
+  });
+
+  useEffect(() => {
+    if (!player) return;
+    const sub = player.addListener("playingChange", (e) => {
+      setIsPlaying(e.isPlaying);
+    });
+    const errSub = player.addListener("statusChange", (e) => {
+      if (e.status === "error") {
+        setPlayerError("Could not load video. Try again later.");
+      }
+    });
+    return () => {
+      sub.remove();
+      errSub.remove();
+    };
+  }, [player]);
+
+  const togglePlay = useCallback(() => {
+    if (!player) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (player.playing) {
+      player.pause();
+    } else {
+      player.play();
+    }
+  }, [player]);
 
   const handleSuggestion = async (suggestion: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -50,10 +84,16 @@ export default function VideoScreen() {
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw new Error(body?.error || "Generation failed");
+        throw new Error((body as any)?.error || "Generation failed");
       }
 
-      const data = await res.json();
+      const data = await res.json() as {
+        script: string;
+        thumbnailPrompt: string;
+        videoUrl: string;
+        duration: number;
+        suggestions: string[];
+      };
       const newVideo = {
         id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
         topic: suggestion,
@@ -111,14 +151,47 @@ export default function VideoScreen() {
           <Feather name="arrow-left" size={20} color={colors.foreground} />
         </Pressable>
 
-        {/* Video player placeholder */}
-        <View style={[styles.videoPlayer, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <View style={[styles.playIconCircle, { backgroundColor: colors.primary + "33" }]}>
-            <Feather name="play" size={40} color={colors.primary} />
+        {/* Video Player */}
+        <View style={[styles.playerWrapper, { backgroundColor: "#000", borderColor: colors.border }]}>
+          {video.videoUrl ? (
+            <>
+              <VideoView
+                player={player}
+                style={styles.videoView}
+                allowsFullscreen
+                allowsPictureInPicture={false}
+                contentFit="contain"
+                nativeControls={Platform.OS !== "web"}
+              />
+              {/* Overlay play button for web */}
+              {Platform.OS === "web" && (
+                <Pressable style={styles.webPlayOverlay} onPress={togglePlay}>
+                  {!isPlaying && (
+                    <View style={[styles.playCircle, { backgroundColor: colors.primary + "CC" }]}>
+                      <Feather name="play" size={36} color="#fff" />
+                    </View>
+                  )}
+                </Pressable>
+              )}
+              {playerError && (
+                <View style={styles.playerErrorOverlay}>
+                  <Text style={styles.playerErrorText}>{playerError}</Text>
+                </View>
+              )}
+            </>
+          ) : (
+            <View style={styles.noVideoPlaceholder}>
+              <Feather name="film" size={40} color={colors.mutedForeground} />
+              <Text style={[styles.noVideoText, { color: colors.mutedForeground }]}>
+                No video available
+              </Text>
+            </View>
+          )}
+
+          {/* Duration badge */}
+          <View style={[styles.durationBadge, { backgroundColor: "#000000AA" }]}>
+            <Text style={styles.durationText}>{video.duration}s</Text>
           </View>
-          <Text style={[styles.durationBadge, { backgroundColor: colors.background + "CC", color: colors.foreground }]}>
-            {video.duration}s
-          </Text>
         </View>
 
         {/* Topic */}
@@ -127,7 +200,7 @@ export default function VideoScreen() {
           Generated {new Date(video.createdAt).toLocaleDateString()}
         </Text>
 
-        {/* Script */}
+        {/* Script collapsible */}
         <Pressable
           onPress={() => setScriptExpanded((v) => !v)}
           style={[styles.scriptSection, { backgroundColor: colors.card, borderColor: colors.border }]}
@@ -141,11 +214,12 @@ export default function VideoScreen() {
             />
           </View>
           {scriptExpanded && (
-            <Text style={[styles.scriptText, { color: colors.foreground }]}>{video.script}</Text>
+            <Text style={[styles.scriptText, { color: colors.foreground }]}>
+              {video.script}
+            </Text>
           )}
         </Pressable>
 
-        {/* Error */}
         {error && (
           <Text style={[styles.errorText, { color: colors.destructive }]}>{error}</Text>
         )}
@@ -153,19 +227,15 @@ export default function VideoScreen() {
         {/* Continue suggestions */}
         {video.suggestions.length > 0 && (
           <>
-            <Text style={[styles.sectionTitle, { color: colors.mutedForeground }]}>
+            <Text style={[styles.sectionTitle, { color: colors.foreground }]}>
               Continue the story
             </Text>
             <Text style={[styles.sectionSub, { color: colors.mutedForeground }]}>
-              Generate a follow-up video
+              Generate a follow-up video on any of these
             </Text>
             <View style={styles.suggestions}>
               {video.suggestions.map((s) => (
-                <SuggestionChip
-                  key={s}
-                  label={s}
-                  onPress={() => handleSuggestion(s)}
-                />
+                <SuggestionChip key={s} label={s} onPress={() => handleSuggestion(s)} />
               ))}
             </View>
           </>
@@ -186,22 +256,55 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginBottom: 16,
   },
-  videoPlayer: {
+  playerWrapper: {
     width: "100%",
     aspectRatio: 16 / 9,
     borderRadius: 20,
     borderWidth: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 20,
     overflow: "hidden",
+    marginBottom: 20,
+    position: "relative",
   },
-  playIconCircle: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
+  videoView: {
+    flex: 1,
+    width: "100%",
+    height: "100%",
+  },
+  webPlayOverlay: {
+    ...StyleSheet.absoluteFillObject,
     alignItems: "center",
     justifyContent: "center",
+  },
+  playCircle: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingLeft: 4,
+  },
+  playerErrorOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#00000088",
+  },
+  playerErrorText: {
+    color: "#fff",
+    fontSize: 13,
+    fontFamily: "Inter_400Regular",
+    textAlign: "center",
+    paddingHorizontal: 20,
+  },
+  noVideoPlaceholder: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+  },
+  noVideoText: {
+    fontSize: 14,
+    fontFamily: "Inter_400Regular",
   },
   durationBadge: {
     position: "absolute",
@@ -210,6 +313,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 8,
+  },
+  durationText: {
+    color: "#fff",
     fontSize: 13,
     fontFamily: "Inter_600SemiBold",
   },
