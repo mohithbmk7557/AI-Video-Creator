@@ -22,40 +22,71 @@ export default function SignUpScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { signUp, errors, fetchStatus } = useSignUp();
+  const { signUp, setActive, isLoaded } = useSignUp();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [verifyStep, setVerifyStep] = useState(false);
   const [code, setCode] = useState("");
-
-  const handleSignUp = async () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    const { error } = await signUp.password({ emailAddress: email, password });
-    if (error) return;
-    await signUp.verifications.sendEmailCode();
-    setVerifyStep(true);
-  };
-
-  const handleVerify = async () => {
-    await signUp.verifications.verifyEmailCode({ code });
-    if (signUp.status === "complete") {
-      await signUp.finalize({
-        navigate: ({ decorateUrl }) => {
-          const url = decorateUrl("/");
-          router.replace(url as any);
-        },
-      });
-    }
-  };
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const topPad = Platform.OS === "web" ? 67 : insets.top;
   const bottomPad = Platform.OS === "web" ? 34 : insets.bottom;
 
-  const fieldError = (field: string) => {
-    const e = errors?.fields as Record<string, { message: string }> | undefined;
-    return e?.[field]?.message;
+  const handleSignUp = async () => {
+    if (!isLoaded || !signUp || loading) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setLoading(true);
+    setError(null);
+
+    try {
+      await signUp.create({ emailAddress: email, password });
+      await signUp.prepareEmailAddressVerification({ strategy: "email_code" });
+      setVerifyStep(true);
+    } catch (e: any) {
+      const msg =
+        e?.errors?.[0]?.longMessage ??
+        e?.errors?.[0]?.message ??
+        e?.message ??
+        "Sign-up failed. Please try again.";
+      setError(msg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVerify = async () => {
+    if (!isLoaded || !signUp || loading) return;
+    setLoading(true);
+    setError(null);
+
+    try {
+      const result = await signUp.attemptEmailAddressVerification({ code });
+      if (result.status === "complete") {
+        await setActive({ session: result.createdSessionId });
+        router.replace("/(home)");
+      } else {
+        setError("Verification incomplete. Please try again.");
+      }
+    } catch (e: any) {
+      const msg =
+        e?.errors?.[0]?.longMessage ??
+        e?.errors?.[0]?.message ??
+        e?.message ??
+        "Invalid code. Please try again.";
+      setError(msg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResend = async () => {
+    if (!signUp) return;
+    try {
+      await signUp.prepareEmailAddressVerification({ strategy: "email_code" });
+    } catch {}
   };
 
   return (
@@ -93,6 +124,7 @@ export default function SignUpScreen() {
           {verifyStep ? (
             <>
               <View style={styles.fieldGroup}>
+                <Text style={[styles.label, { color: colors.mutedForeground }]}>Verification code</Text>
                 <TextInput
                   style={[
                     styles.input,
@@ -100,43 +132,49 @@ export default function SignUpScreen() {
                       backgroundColor: colors.input,
                       color: colors.foreground,
                       borderColor: colors.border,
+                      letterSpacing: 4,
+                      textAlign: "center",
                     },
                   ]}
                   value={code}
-                  onChangeText={setCode}
-                  placeholder="6-digit code"
+                  onChangeText={(v) => { setCode(v); setError(null); }}
+                  placeholder="------"
                   placeholderTextColor={colors.mutedForeground}
                   keyboardType="numeric"
+                  maxLength={6}
                   autoFocus
                 />
-                {fieldError("code") && (
-                  <Text style={[styles.errorText, { color: colors.destructive }]}>
-                    {fieldError("code")}
-                  </Text>
-                )}
               </View>
+
+              {error && (
+                <View style={[styles.errorBox, { backgroundColor: colors.destructive + "22", borderColor: colors.destructive + "44" }]}>
+                  <Feather name="alert-circle" size={14} color={colors.destructive} />
+                  <Text style={[styles.errorText, { color: colors.destructive }]}>{error}</Text>
+                </View>
+              )}
+
               <Pressable
                 style={({ pressed }) => [
                   styles.primaryBtn,
                   { backgroundColor: colors.primary },
-                  (fetchStatus === "fetching" || !code) && { opacity: 0.5 },
+                  (loading || code.length < 6) && { opacity: 0.5 },
                   pressed && { opacity: 0.85 },
                 ]}
                 onPress={handleVerify}
-                disabled={fetchStatus === "fetching" || !code}
+                disabled={loading || code.length < 6}
               >
-                {fetchStatus === "fetching" ? (
+                {loading ? (
                   <ActivityIndicator color="#fff" />
                 ) : (
                   <Text style={styles.btnText}>Verify & continue</Text>
                 )}
               </Pressable>
-              <Pressable onPress={() => signUp.verifications.sendEmailCode()}>
+
+              <Pressable onPress={handleResend} style={styles.resendBtn}>
                 <Text style={[styles.resend, { color: colors.mutedForeground }]}>
-                  Resend code
+                  Didn't get it? Resend code
                 </Text>
               </Pressable>
-              <View nativeID="clerk-captcha" />
             </>
           ) : (
             <>
@@ -148,22 +186,17 @@ export default function SignUpScreen() {
                     {
                       backgroundColor: colors.input,
                       color: colors.foreground,
-                      borderColor: fieldError("emailAddress") ? colors.destructive : colors.border,
+                      borderColor: colors.border,
                     },
                   ]}
                   value={email}
-                  onChangeText={setEmail}
+                  onChangeText={(v) => { setEmail(v); setError(null); }}
                   placeholder="you@example.com"
                   placeholderTextColor={colors.mutedForeground}
                   keyboardType="email-address"
                   autoCapitalize="none"
                   autoCorrect={false}
                 />
-                {fieldError("emailAddress") && (
-                  <Text style={[styles.errorText, { color: colors.destructive }]}>
-                    {fieldError("emailAddress")}
-                  </Text>
-                )}
               </View>
 
               <View style={styles.fieldGroup}>
@@ -175,12 +208,12 @@ export default function SignUpScreen() {
                       {
                         backgroundColor: colors.input,
                         color: colors.foreground,
-                        borderColor: fieldError("password") ? colors.destructive : colors.border,
+                        borderColor: colors.border,
                         paddingRight: 48,
                       },
                     ]}
                     value={password}
-                    onChangeText={setPassword}
+                    onChangeText={(v) => { setPassword(v); setError(null); }}
                     placeholder="Min 8 characters"
                     placeholderTextColor={colors.mutedForeground}
                     secureTextEntry={!showPassword}
@@ -196,24 +229,26 @@ export default function SignUpScreen() {
                     />
                   </Pressable>
                 </View>
-                {fieldError("password") && (
-                  <Text style={[styles.errorText, { color: colors.destructive }]}>
-                    {fieldError("password")}
-                  </Text>
-                )}
               </View>
+
+              {error && (
+                <View style={[styles.errorBox, { backgroundColor: colors.destructive + "22", borderColor: colors.destructive + "44" }]}>
+                  <Feather name="alert-circle" size={14} color={colors.destructive} />
+                  <Text style={[styles.errorText, { color: colors.destructive }]}>{error}</Text>
+                </View>
+              )}
 
               <Pressable
                 style={({ pressed }) => [
                   styles.primaryBtn,
                   { backgroundColor: colors.primary },
-                  (fetchStatus === "fetching" || !email || !password) && { opacity: 0.5 },
+                  (loading || !email || !password) && { opacity: 0.5 },
                   pressed && { opacity: 0.85 },
                 ]}
                 onPress={handleSignUp}
-                disabled={fetchStatus === "fetching" || !email || !password}
+                disabled={loading || !email || !password}
               >
-                {fetchStatus === "fetching" ? (
+                {loading ? (
                   <ActivityIndicator color="#fff" />
                 ) : (
                   <Text style={styles.btnText}>Create account</Text>
@@ -230,7 +265,6 @@ export default function SignUpScreen() {
                   </Pressable>
                 </Link>
               </View>
-              <View nativeID="clerk-captcha" />
             </>
           )}
         </ScrollView>
@@ -242,10 +276,7 @@ export default function SignUpScreen() {
 const styles = StyleSheet.create({
   root: { flex: 1 },
   flex: { flex: 1 },
-  scroll: {
-    paddingHorizontal: 24,
-    alignItems: "stretch",
-  },
+  scroll: { paddingHorizontal: 24, alignItems: "stretch" },
   logoBox: {
     width: 72,
     height: 72,
@@ -268,9 +299,7 @@ const styles = StyleSheet.create({
     marginBottom: 36,
     lineHeight: 22,
   },
-  fieldGroup: {
-    marginBottom: 16,
-  },
+  fieldGroup: { marginBottom: 16 },
   label: {
     fontSize: 13,
     fontFamily: "Inter_500Medium",
@@ -284,46 +313,37 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontFamily: "Inter_400Regular",
   },
-  eyeBtn: {
-    position: "absolute",
-    right: 14,
-    top: 17,
+  eyeBtn: { position: "absolute", right: 14, top: 17 },
+  errorBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    marginBottom: 16,
   },
   errorText: {
-    fontSize: 12,
+    fontSize: 13,
     fontFamily: "Inter_400Regular",
-    marginTop: 4,
+    flex: 1,
+    lineHeight: 18,
   },
   primaryBtn: {
     height: 54,
     borderRadius: 14,
     alignItems: "center",
     justifyContent: "center",
-    marginTop: 8,
     marginBottom: 20,
   },
-  btnText: {
-    color: "#fff",
-    fontSize: 16,
-    fontFamily: "Inter_600SemiBold",
-  },
+  btnText: { color: "#fff", fontSize: 16, fontFamily: "Inter_600SemiBold" },
   switchRow: {
     flexDirection: "row",
     justifyContent: "center",
     alignItems: "center",
   },
-  switchText: {
-    fontSize: 14,
-    fontFamily: "Inter_400Regular",
-  },
-  link: {
-    fontSize: 14,
-    fontFamily: "Inter_600SemiBold",
-  },
-  resend: {
-    fontSize: 13,
-    fontFamily: "Inter_400Regular",
-    textAlign: "center",
-    marginTop: 12,
-  },
+  switchText: { fontSize: 14, fontFamily: "Inter_400Regular" },
+  link: { fontSize: 14, fontFamily: "Inter_600SemiBold" },
+  resendBtn: { alignItems: "center", marginTop: 4 },
+  resend: { fontSize: 13, fontFamily: "Inter_400Regular" },
 });

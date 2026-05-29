@@ -8,6 +8,53 @@ const openai = new OpenAI({
   apiKey: process.env["AI_INTEGRATIONS_OPENAI_API_KEY"],
 });
 
+// Freely available stock/public domain MP4s grouped by keyword
+const VIDEO_LIBRARY: Record<string, string> = {
+  space: "https://cdn.coverr.co/videos/coverr-view-of-earth-from-space-4774/1080p.mp4",
+  universe: "https://cdn.coverr.co/videos/coverr-view-of-earth-from-space-4774/1080p.mp4",
+  galaxy: "https://cdn.coverr.co/videos/coverr-view-of-earth-from-space-4774/1080p.mp4",
+  planet: "https://cdn.coverr.co/videos/coverr-view-of-earth-from-space-4774/1080p.mp4",
+  "black hole": "https://cdn.coverr.co/videos/coverr-view-of-earth-from-space-4774/1080p.mp4",
+  star: "https://cdn.coverr.co/videos/coverr-view-of-earth-from-space-4774/1080p.mp4",
+  ocean: "https://cdn.coverr.co/videos/coverr-ocean-aerial-6698/1080p.mp4",
+  sea: "https://cdn.coverr.co/videos/coverr-ocean-aerial-6698/1080p.mp4",
+  water: "https://cdn.coverr.co/videos/coverr-ocean-aerial-6698/1080p.mp4",
+  wave: "https://cdn.coverr.co/videos/coverr-ocean-aerial-6698/1080p.mp4",
+  nature: "https://cdn.coverr.co/videos/coverr-aerial-forest-7077/1080p.mp4",
+  forest: "https://cdn.coverr.co/videos/coverr-aerial-forest-7077/1080p.mp4",
+  tree: "https://cdn.coverr.co/videos/coverr-aerial-forest-7077/1080p.mp4",
+  climate: "https://cdn.coverr.co/videos/coverr-aerial-forest-7077/1080p.mp4",
+  city: "https://cdn.coverr.co/videos/coverr-new-york-city-at-night-2911/1080p.mp4",
+  urban: "https://cdn.coverr.co/videos/coverr-new-york-city-at-night-2911/1080p.mp4",
+  technology: "https://cdn.coverr.co/videos/coverr-typing-on-a-laptop-5191/1080p.mp4",
+  computer: "https://cdn.coverr.co/videos/coverr-typing-on-a-laptop-5191/1080p.mp4",
+  ai: "https://cdn.coverr.co/videos/coverr-typing-on-a-laptop-5191/1080p.mp4",
+  data: "https://cdn.coverr.co/videos/coverr-typing-on-a-laptop-5191/1080p.mp4",
+  quantum: "https://cdn.coverr.co/videos/coverr-typing-on-a-laptop-5191/1080p.mp4",
+  science: "https://cdn.coverr.co/videos/coverr-typing-on-a-laptop-5191/1080p.mp4",
+  biology: "https://cdn.coverr.co/videos/coverr-aerial-forest-7077/1080p.mp4",
+  human: "https://cdn.coverr.co/videos/coverr-people-walking-in-the-city-5087/1080p.mp4",
+  people: "https://cdn.coverr.co/videos/coverr-people-walking-in-the-city-5087/1080p.mp4",
+  history: "https://cdn.coverr.co/videos/coverr-clock-hands-2734/1080p.mp4",
+  time: "https://cdn.coverr.co/videos/coverr-clock-hands-2734/1080p.mp4",
+  food: "https://cdn.coverr.co/videos/coverr-cooking-in-a-pan-3307/1080p.mp4",
+  health: "https://cdn.coverr.co/videos/coverr-sunrise-on-the-mountains-2648/1080p.mp4",
+  mountain: "https://cdn.coverr.co/videos/coverr-sunrise-on-the-mountains-2648/1080p.mp4",
+  business: "https://cdn.coverr.co/videos/coverr-business-meeting-2978/1080p.mp4",
+  future: "https://cdn.coverr.co/videos/coverr-typing-on-a-laptop-5191/1080p.mp4",
+};
+
+const FALLBACK_VIDEO =
+  "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4";
+
+function pickVideoUrl(topic: string): string {
+  const lower = topic.toLowerCase();
+  for (const [keyword, url] of Object.entries(VIDEO_LIBRARY)) {
+    if (lower.includes(keyword)) return url;
+  }
+  return FALLBACK_VIDEO;
+}
+
 router.post("/generate", async (req, res) => {
   try {
     const { topic, continuationOf } = req.body as {
@@ -77,14 +124,16 @@ Return only valid JSON, no markdown, no extra text.`;
       throw new Error("Invalid AI response structure");
     }
 
-    const videoUrl = "";
+    const videoUrl = pickVideoUrl(topic);
 
     return res.json({
       script: parsed.script,
       thumbnailPrompt: parsed.thumbnailPrompt ?? "",
       videoUrl,
       duration: parsed.duration ?? 59,
-      suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions.slice(0, 4) : [],
+      suggestions: Array.isArray(parsed.suggestions)
+        ? parsed.suggestions.slice(0, 4)
+        : [],
     });
   } catch (err: any) {
     req.log?.error({ err }, "Video generation failed");
