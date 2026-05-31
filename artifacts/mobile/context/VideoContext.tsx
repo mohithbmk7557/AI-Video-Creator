@@ -15,6 +15,8 @@ export interface Slide {
   fact: string;
   narration: string;
   imageQuery: string;
+  imageUrl: string;       // Real photo URL (Wikipedia or fallback)
+  imageCaption: string;   // Photo caption / source label
   accent: string;
 }
 
@@ -40,7 +42,7 @@ const VideoContext = createContext<VideoContextValue>({
   clearHistory: async () => {},
 });
 
-const STORAGE_KEY = "@aivid_history_v2";
+const STORAGE_KEY = "@aivid_history_v3";
 
 export function VideoProvider({ children }: { children: ReactNode }) {
   const [history, setHistory] = useState<VideoItem[]>([]);
@@ -48,9 +50,7 @@ export function VideoProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     AsyncStorage.getItem(STORAGE_KEY).then((val) => {
       if (val) {
-        try {
-          setHistory(JSON.parse(val));
-        } catch {}
+        try { setHistory(JSON.parse(val)); } catch {}
       }
     });
   }, []);

@@ -1,4 +1,5 @@
 import { Feather } from "@expo/vector-icons";
+import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Haptics from "expo-haptics";
 import { useAuth } from "@clerk/expo";
@@ -16,9 +17,13 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+
 import { useColors } from "@/hooks/useColors";
 import { useVideos, type VideoItem } from "@/context/VideoContext";
 import { SlidePlayer } from "@/components/SlidePlayer";
+
+const CARD_THUMB_W = 110;
+const CARD_THUMB_H = 80;
 
 const DEFAULT_SUGGESTIONS = [
   "London landmarks",
@@ -251,28 +256,42 @@ function VideoHistoryItem({
       {/* AI response card */}
       <Pressable
         onPress={onPlay}
-        style={({ pressed }) => [styles.videoCard, { backgroundColor: colors.card, borderColor: colors.border }, pressed && { opacity: 0.9 }]}
+        style={({ pressed }) => [styles.videoCard, { backgroundColor: colors.card, borderColor: colors.border }, pressed && { opacity: 0.92, transform: [{ scale: 0.985 }] }]}
       >
-        {/* Gradient strip */}
-        <LinearGradient colors={["#6C63FF", "#7C3AED"]} style={styles.cardStrip} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
-          <Feather name="film" size={14} color="#fff" />
-          <Text style={styles.cardStripText}>AI Video</Text>
-          <View style={styles.cardStripDuration}>
-            <Text style={styles.cardStripDurationText}>{totalDuration}s</Text>
+        {/* Thumbnail */}
+        <View style={styles.cardThumb}>
+          {video.slides[0]?.imageUrl ? (
+            <Image
+              source={{ uri: video.slides[0].imageUrl }}
+              style={StyleSheet.absoluteFill}
+              contentFit="cover"
+            />
+          ) : null}
+          <LinearGradient
+            colors={["#00000033", "#00000088"]}
+            style={StyleSheet.absoluteFill}
+          />
+          {/* Play overlay */}
+          <LinearGradient colors={["#6C63FF", "#7C3AED"]} style={styles.thumbPlayBtn} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}>
+            <Feather name="play" size={14} color="#fff" style={{ marginLeft: 2 }} />
+          </LinearGradient>
+          {/* Duration badge */}
+          <View style={styles.durationBadge}>
+            <Text style={styles.durationBadgeText}>{totalDuration}s</Text>
           </View>
-        </LinearGradient>
+        </View>
 
+        {/* Text content */}
         <View style={styles.cardBody}>
+          <View style={styles.cardTitleRow}>
+            <View style={styles.aiPill}>
+              <Text style={styles.aiPillText}>AI Video</Text>
+            </View>
+          </View>
           <Text style={[styles.cardTitle, { color: colors.foreground }]} numberOfLines={2}>{video.title}</Text>
           <Text style={[styles.cardMeta, { color: colors.mutedForeground }]}>
             {video.slides.length} scenes · Tap to watch
           </Text>
-        </View>
-
-        <View style={styles.cardPlay}>
-          <LinearGradient colors={["#6C63FF", "#7C3AED"]} style={styles.playCircle} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}>
-            <Feather name="play" size={16} color="#fff" />
-          </LinearGradient>
         </View>
       </Pressable>
     </View>
@@ -307,17 +326,33 @@ const styles = StyleSheet.create({
   timeLabel: { fontSize: 11, fontFamily: "Inter_400Regular", marginRight: 4 },
   videoCard: {
     borderRadius: 16, borderWidth: 1, overflow: "hidden",
-    flexDirection: "row", alignItems: "center",
+    flexDirection: "row", alignItems: "stretch",
   },
-  cardStrip: { paddingVertical: 10, paddingHorizontal: 12, alignItems: "center", gap: 6, width: 80 },
-  cardStripText: { color: "#fff", fontSize: 10, fontFamily: "Inter_600SemiBold" },
-  cardStripDuration: { backgroundColor: "#ffffff33", borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2 },
-  cardStripDurationText: { color: "#fff", fontSize: 11, fontFamily: "Inter_700Bold" },
-  cardBody: { flex: 1, paddingHorizontal: 14, paddingVertical: 12, gap: 3 },
-  cardTitle: { fontSize: 14, fontFamily: "Inter_600SemiBold", lineHeight: 20 },
-  cardMeta: { fontSize: 12, fontFamily: "Inter_400Regular" },
-  cardPlay: { paddingRight: 14 },
-  playCircle: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center", paddingLeft: 2 },
+  cardThumb: {
+    width: CARD_THUMB_W, height: CARD_THUMB_H,
+    backgroundColor: "#1a1a2e", overflow: "hidden",
+    alignItems: "center", justifyContent: "center",
+  },
+  thumbPlayBtn: {
+    width: 32, height: 32, borderRadius: 16,
+    alignItems: "center", justifyContent: "center",
+  },
+  durationBadge: {
+    position: "absolute", bottom: 6, right: 6,
+    backgroundColor: "#000000AA", borderRadius: 8,
+    paddingHorizontal: 6, paddingVertical: 2,
+  },
+  durationBadgeText: { color: "#fff", fontSize: 10, fontFamily: "Inter_700Bold" },
+  cardBody: { flex: 1, paddingHorizontal: 12, paddingVertical: 10, gap: 4, justifyContent: "center" },
+  cardTitleRow: { flexDirection: "row", alignItems: "center" },
+  aiPill: {
+    backgroundColor: "#6C63FF22", borderRadius: 10,
+    paddingHorizontal: 8, paddingVertical: 2,
+    borderWidth: 1, borderColor: "#6C63FF44",
+  },
+  aiPillText: { color: "#6C63FF", fontSize: 10, fontFamily: "Inter_600SemiBold" },
+  cardTitle: { fontSize: 13, fontFamily: "Inter_600SemiBold", lineHeight: 19 },
+  cardMeta: { fontSize: 11, fontFamily: "Inter_400Regular" },
   bottomArea: { borderTopWidth: 1, paddingHorizontal: 12, paddingTop: 10, gap: 8 },
   suggestionsScroll: { maxHeight: 38 },
   suggestionsRow: { gap: 8, paddingRight: 8 },
