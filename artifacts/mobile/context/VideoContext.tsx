@@ -8,13 +8,22 @@ import React, {
   type ReactNode,
 } from "react";
 
+export interface Slide {
+  id: string;
+  duration: number;
+  heading: string;
+  fact: string;
+  narration: string;
+  imageQuery: string;
+  accent: string;
+}
+
 export interface VideoItem {
   id: string;
   topic: string;
+  title: string;
+  slides: Slide[];
   script: string;
-  videoUrl: string;
-  thumbnailPrompt: string;
-  duration: number;
   suggestions: string[];
   createdAt: number;
 }
@@ -31,7 +40,7 @@ const VideoContext = createContext<VideoContextValue>({
   clearHistory: async () => {},
 });
 
-const STORAGE_KEY = "@aivid_history";
+const STORAGE_KEY = "@aivid_history_v2";
 
 export function VideoProvider({ children }: { children: ReactNode }) {
   const [history, setHistory] = useState<VideoItem[]>([]);
@@ -48,7 +57,7 @@ export function VideoProvider({ children }: { children: ReactNode }) {
 
   const addVideo = useCallback(async (video: VideoItem) => {
     setHistory((prev) => {
-      const updated = [video, ...prev].slice(0, 20);
+      const updated = [video, ...prev].slice(0, 30);
       AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
       return updated;
     });
