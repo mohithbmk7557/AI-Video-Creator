@@ -1,10 +1,12 @@
 import { Feather } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
 import * as Haptics from "expo-haptics";
-import { useRouter } from "expo-router";
 import { useAuth } from "@clerk/expo";
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import {
+  ActivityIndicator,
   FlatList,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -14,34 +16,38 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useColors } from "@/hooks/useColors";
 import { useVideos, type VideoItem } from "@/context/VideoContext";
-import { VideoCard } from "@/components/VideoCard";
-import { LoadingOverlay } from "@/components/LoadingOverlay";
-import { GradientButton } from "@/components/GradientButton";
+import { SlidePlayer } from "@/components/SlidePlayer";
 
-const QUICK_TOPICS = [
-  "The future of space exploration",
-  "How black holes work",
-  "Climate change solutions",
-  "Quantum computing explained",
-  "History of artificial intelligence",
+const DEFAULT_SUGGESTIONS = [
+  "London landmarks",
+  "How AI works",
+  "The Great Wall of China",
+  "Black holes explained",
+  "Tokyo culture",
+  "Amazon rainforest",
 ];
 
 export default function HomeScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const router = useRouter();
-  const { signOut } = useAuth();
-  const { history, addVideo } = useVideos();
+  const { signOut, user } = useAuth();
+  const { history, addVideo, clearHistory } = useVideos();
 
   const [topic, setTopic] = useState("");
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [activeVideo, setActiveVideo] = useState<VideoItem | null>(null);
 
-  const topPad = Platform.OS === "web" ? 67 : insets.top;
-  const bottomPad = Platform.OS === "web" ? 34 : insets.bottom;
+  const listRef = useRef<FlatList>(null);
+  const topPad = Platform.OS === "web" ? 56 : insets.top;
+  const bottomPad = Platform.OS === "web" ? 20 : insets.bottom;
+
+  // Collect unique suggestions from history or use defaults
+  const suggestions = history.length > 0
+    ? [...new Set(history.flatMap((v) => v.suggestions))].slice(0, 8)
+    : DEFAULT_SUGGESTIONS;
 
   const handleGenerate = async (inputTopic?: string) => {
     const t = (inputTopic ?? topic).trim();
@@ -62,24 +68,32 @@ export default function HomeScreen() {
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw new Error(body?.error || "Failed to generate video");
+        throw new Error((body as any)?.error || "Failed to generate video");
       }
 
-      const data = await res.json();
+      const data = await res.json() as {
+        title: string;
+        slides: VideoItem["slides"];
+        script: string;
+        suggestions: string[];
+      };
+
       const video: VideoItem = {
-        id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+        id: Date.now().toString() + Math.random().toString(36).slice(2, 8),
         topic: t,
-        script: data.script,
-        videoUrl: data.videoUrl,
-        thumbnailPrompt: data.thumbnailPrompt,
-        duration: data.duration ?? 59,
+        title: data.title ?? t,
+        slides: data.slides ?? [],
+        script: data.script ?? "",
         suggestions: data.suggestions ?? [],
         createdAt: Date.now(),
       };
 
       await addVideo(video);
       setTopic("");
-      router.push({ pathname: "/(home)/video", params: { id: video.id } });
+      setActiveVideo(video);
+
+      // Scroll to bottom after add
+      setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 300);
     } catch (e: any) {
       setError(e.message ?? "Something went wrong");
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -88,199 +102,243 @@ export default function HomeScreen() {
     }
   };
 
-  const handleVideoPress = (video: VideoItem) => {
-    router.push({ pathname: "/(home)/video", params: { id: video.id } });
-  };
+  const renderItem = ({ item }: { item: VideoItem }) => (
+    <VideoHistoryItem video={item} colors={colors} onPlay={() => setActiveVideo(item)} />
+  );
 
   return (
     <View style={[styles.root, { backgroundColor: colors.background }]}>
-      <LoadingOverlay visible={generating} topic={topic} />
+      {/* Header */}
+      <View style={[styles.header, { paddingTop: topPad + 8, borderBottomColor: colors.border }]}>
+        <LinearGradient colors={[colors.gradientStart, colors.gradientEnd]} style={styles.headerIcon} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}>
+          <Feather name="film" size={16} color="#fff" />
+        </LinearGradient>
+        <Text style={[styles.headerTitle, { color: colors.foreground }]}>AiVid</Text>
+        <View style={styles.headerRight}>
+          <Pressable onPress={() => clearHistory()} style={[styles.iconBtn, { backgroundColor: colors.secondary }]}>
+            <Feather name="trash-2" size={16} color={colors.mutedForeground} />
+          </Pressable>
+          <Pressable onPress={() => signOut()} style={[styles.iconBtn, { backgroundColor: colors.secondary }]}>
+            <Feather name="log-out" size={16} color={colors.mutedForeground} />
+          </Pressable>
+        </View>
+      </View>
 
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior="padding"
-        keyboardVerticalOffset={0}
-      >
-        <ScrollView
-          contentContainerStyle={[
-            styles.scroll,
-            { paddingTop: topPad + 16, paddingBottom: bottomPad + 24 },
-          ]}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
-          {/* Header */}
-          <View style={styles.header}>
-            <View>
-              <Text style={[styles.appName, { color: colors.foreground }]}>AiVid</Text>
-              <Text style={[styles.headerSub, { color: colors.mutedForeground }]}>
-                AI Video Generator
-              </Text>
-            </View>
-            <Pressable
-              onPress={() => signOut()}
-              style={[styles.iconBtn, { backgroundColor: colors.secondary }]}
-            >
-              <Feather name="log-out" size={18} color={colors.mutedForeground} />
-            </Pressable>
-          </View>
-
-          {/* Prompt Box */}
-          <View style={[styles.promptCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Text style={[styles.promptLabel, { color: colors.foreground }]}>
-              What video do you want to create?
-            </Text>
-            <TextInput
-              style={[styles.promptInput, { color: colors.foreground, backgroundColor: colors.input, borderColor: colors.border }]}
-              value={topic}
-              onChangeText={setTopic}
-              placeholder="e.g. How do neural networks learn?"
-              placeholderTextColor={colors.mutedForeground}
-              multiline
-              numberOfLines={3}
-              textAlignVertical="top"
-              returnKeyType="done"
-            />
-            {error && (
-              <Text style={[styles.errorText, { color: colors.destructive }]}>{error}</Text>
-            )}
-            <GradientButton
-              label="Generate Video"
-              onPress={() => handleGenerate()}
-              loading={generating}
-              disabled={!topic.trim() || generating}
-            />
-          </View>
-
-          {/* Quick Topics */}
-          <Text style={[styles.sectionTitle, { color: colors.mutedForeground }]}>
-            Quick topics
+      {/* History / Chat list */}
+      {history.length === 0 ? (
+        <View style={styles.emptyState}>
+          <Feather name="film" size={48} color={colors.mutedForeground} />
+          <Text style={[styles.emptyTitle, { color: colors.foreground }]}>What do you want to learn about?</Text>
+          <Text style={[styles.emptySub, { color: colors.mutedForeground }]}>
+            Enter any topic below and I'll generate a{"\n"}59-second documentary video for you.
           </Text>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            style={styles.quickScroll}
-            contentContainerStyle={styles.quickContent}
-          >
-            {QUICK_TOPICS.map((t) => (
-              <Pressable
-                key={t}
-                onPress={() => { setTopic(t); handleGenerate(t); }}
-                style={({ pressed }) => [
-                  styles.quickChip,
-                  { backgroundColor: colors.secondary, borderColor: colors.border },
-                  pressed && { opacity: 0.7, borderColor: colors.primary },
-                ]}
-              >
-                <Text style={[styles.quickChipText, { color: colors.foreground }]}>{t}</Text>
-              </Pressable>
-            ))}
-          </ScrollView>
+        </View>
+      ) : (
+        <FlatList
+          ref={listRef}
+          data={[...history].reverse()}
+          keyExtractor={(item) => item.id}
+          renderItem={renderItem}
+          contentContainerStyle={styles.list}
+          showsVerticalScrollIndicator={false}
+          onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
+        />
+      )}
 
-          {/* History */}
-          {history.length > 0 && (
-            <>
-              <Text style={[styles.sectionTitle, { color: colors.mutedForeground }]}>
-                Recent videos
-              </Text>
-              {history.map((v) => (
-                <VideoCard key={v.id} video={v} onPress={handleVideoPress} />
-              ))}
-            </>
-          )}
-
-          {history.length === 0 && (
-            <View style={styles.emptyState}>
-              <Feather name="film" size={40} color={colors.mutedForeground} />
-              <Text style={[styles.emptyTitle, { color: colors.mutedForeground }]}>
-                Your generated videos appear here
-              </Text>
-            </View>
-          )}
+      {/* Bottom area */}
+      <View style={[styles.bottomArea, { paddingBottom: bottomPad + 8, borderTopColor: colors.border, backgroundColor: colors.background }]}>
+        {/* Suggestions */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.suggestionsRow}
+          style={styles.suggestionsScroll}
+        >
+          {suggestions.map((s) => (
+            <Pressable
+              key={s}
+              onPress={() => handleGenerate(s)}
+              style={({ pressed }) => [
+                styles.suggestionChip,
+                { backgroundColor: colors.secondary, borderColor: colors.border },
+                pressed && { borderColor: colors.primary, opacity: 0.8 },
+              ]}
+              disabled={generating}
+            >
+              <Text style={[styles.suggestionText, { color: colors.foreground }]} numberOfLines={1}>{s}</Text>
+            </Pressable>
+          ))}
         </ScrollView>
-      </KeyboardAvoidingView>
+
+        {/* Error */}
+        {error && (
+          <View style={[styles.errorRow, { backgroundColor: colors.destructive + "22" }]}>
+            <Feather name="alert-circle" size={13} color={colors.destructive} />
+            <Text style={[styles.errorText, { color: colors.destructive }]}>{error}</Text>
+          </View>
+        )}
+
+        {/* Input bar */}
+        <View style={[styles.inputBar, { backgroundColor: colors.input, borderColor: generating ? colors.primary : colors.border }]}>
+          <TextInput
+            style={[styles.textInput, { color: colors.foreground }]}
+            value={topic}
+            onChangeText={(v) => { setTopic(v); setError(null); }}
+            placeholder="Ask about any topic…"
+            placeholderTextColor={colors.mutedForeground}
+            onSubmitEditing={() => handleGenerate()}
+            returnKeyType="send"
+            multiline={false}
+            editable={!generating}
+          />
+          <Pressable
+            onPress={() => handleGenerate()}
+            disabled={!topic.trim() || generating}
+            style={({ pressed }) => [
+              styles.sendBtn,
+              { backgroundColor: topic.trim() && !generating ? colors.primary : colors.secondary },
+              pressed && { opacity: 0.8 },
+            ]}
+          >
+            {generating
+              ? <ActivityIndicator size="small" color={colors.primary} />
+              : <Feather name="arrow-up" size={18} color={topic.trim() ? "#fff" : colors.mutedForeground} />
+            }
+          </Pressable>
+        </View>
+      </View>
+
+      {/* Fullscreen player modal */}
+      <Modal
+        visible={activeVideo !== null}
+        animationType="slide"
+        statusBarTranslucent
+        onRequestClose={() => setActiveVideo(null)}
+      >
+        {activeVideo && (
+          <SlidePlayer
+            title={activeVideo.title}
+            slides={activeVideo.slides}
+            script={activeVideo.script}
+            onClose={() => setActiveVideo(null)}
+          />
+        )}
+      </Modal>
+    </View>
+  );
+}
+
+function VideoHistoryItem({
+  video, colors, onPlay,
+}: {
+  video: VideoItem;
+  colors: ReturnType<typeof import("@/hooks/useColors").useColors>;
+  onPlay: () => void;
+}) {
+  const timeLabel = new Date(video.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const totalDuration = video.slides.reduce((s, sl) => s + sl.duration, 0);
+
+  return (
+    <View style={styles.historyItem}>
+      {/* User query bubble */}
+      <View style={styles.userBubbleRow}>
+        <View style={[styles.userBubble, { backgroundColor: "#6C63FF22", borderColor: "#6C63FF44" }]}>
+          <Text style={[styles.userBubbleText, { color: colors.foreground }]}>{video.topic}</Text>
+        </View>
+        <Text style={[styles.timeLabel, { color: colors.mutedForeground }]}>{timeLabel}</Text>
+      </View>
+
+      {/* AI response card */}
+      <Pressable
+        onPress={onPlay}
+        style={({ pressed }) => [styles.videoCard, { backgroundColor: colors.card, borderColor: colors.border }, pressed && { opacity: 0.9 }]}
+      >
+        {/* Gradient strip */}
+        <LinearGradient colors={["#6C63FF", "#7C3AED"]} style={styles.cardStrip} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
+          <Feather name="film" size={14} color="#fff" />
+          <Text style={styles.cardStripText}>AI Video</Text>
+          <View style={styles.cardStripDuration}>
+            <Text style={styles.cardStripDurationText}>{totalDuration}s</Text>
+          </View>
+        </LinearGradient>
+
+        <View style={styles.cardBody}>
+          <Text style={[styles.cardTitle, { color: colors.foreground }]} numberOfLines={2}>{video.title}</Text>
+          <Text style={[styles.cardMeta, { color: colors.mutedForeground }]}>
+            {video.slides.length} scenes · Tap to watch
+          </Text>
+        </View>
+
+        <View style={styles.cardPlay}>
+          <LinearGradient colors={["#6C63FF", "#7C3AED"]} style={styles.playCircle} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}>
+            <Feather name="play" size={16} color="#fff" />
+          </LinearGradient>
+        </View>
+      </Pressable>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  flex: { flex: 1 },
-  scroll: { paddingHorizontal: 20 },
   header: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    marginBottom: 24,
-  },
-  appName: {
-    fontSize: 28,
-    fontFamily: "Inter_700Bold",
-    letterSpacing: -0.5,
-  },
-  headerSub: {
-    fontSize: 13,
-    fontFamily: "Inter_400Regular",
-    marginTop: 2,
-  },
-  iconBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
     alignItems: "center",
-    justifyContent: "center",
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    gap: 10,
   },
-  promptCard: {
-    borderRadius: 20,
-    borderWidth: 1,
-    padding: 20,
-    gap: 14,
-    marginBottom: 28,
+  headerIcon: { width: 30, height: 30, borderRadius: 8, alignItems: "center", justifyContent: "center" },
+  headerTitle: { fontSize: 17, fontFamily: "Inter_700Bold", flex: 1 },
+  headerRight: { flexDirection: "row", gap: 8 },
+  iconBtn: { width: 34, height: 34, borderRadius: 10, alignItems: "center", justifyContent: "center" },
+  emptyState: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 32, gap: 14 },
+  emptyTitle: { fontSize: 20, fontFamily: "Inter_700Bold", textAlign: "center", lineHeight: 28 },
+  emptySub: { fontSize: 14, fontFamily: "Inter_400Regular", textAlign: "center", lineHeight: 22 },
+  list: { paddingHorizontal: 16, paddingVertical: 16, gap: 24 },
+  historyItem: { gap: 8 },
+  userBubbleRow: { alignItems: "flex-end", gap: 4 },
+  userBubble: {
+    alignSelf: "flex-end", maxWidth: "80%",
+    paddingHorizontal: 14, paddingVertical: 10, borderRadius: 18, borderWidth: 1,
   },
-  promptLabel: {
-    fontSize: 16,
-    fontFamily: "Inter_600SemiBold",
+  userBubbleText: { fontSize: 14, fontFamily: "Inter_500Medium", lineHeight: 20 },
+  timeLabel: { fontSize: 11, fontFamily: "Inter_400Regular", marginRight: 4 },
+  videoCard: {
+    borderRadius: 16, borderWidth: 1, overflow: "hidden",
+    flexDirection: "row", alignItems: "center",
   },
-  promptInput: {
-    borderRadius: 12,
-    borderWidth: 1,
-    padding: 14,
-    fontSize: 15,
-    fontFamily: "Inter_400Regular",
-    minHeight: 90,
-    lineHeight: 22,
+  cardStrip: { paddingVertical: 10, paddingHorizontal: 12, alignItems: "center", gap: 6, width: 80 },
+  cardStripText: { color: "#fff", fontSize: 10, fontFamily: "Inter_600SemiBold" },
+  cardStripDuration: { backgroundColor: "#ffffff33", borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2 },
+  cardStripDurationText: { color: "#fff", fontSize: 11, fontFamily: "Inter_700Bold" },
+  cardBody: { flex: 1, paddingHorizontal: 14, paddingVertical: 12, gap: 3 },
+  cardTitle: { fontSize: 14, fontFamily: "Inter_600SemiBold", lineHeight: 20 },
+  cardMeta: { fontSize: 12, fontFamily: "Inter_400Regular" },
+  cardPlay: { paddingRight: 14 },
+  playCircle: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center", paddingLeft: 2 },
+  bottomArea: { borderTopWidth: 1, paddingHorizontal: 12, paddingTop: 10, gap: 8 },
+  suggestionsScroll: { maxHeight: 38 },
+  suggestionsRow: { gap: 8, paddingRight: 8 },
+  suggestionChip: {
+    paddingHorizontal: 14, paddingVertical: 7,
+    borderRadius: 20, borderWidth: 1, height: 34, justifyContent: "center",
   },
-  errorText: {
-    fontSize: 13,
-    fontFamily: "Inter_400Regular",
+  suggestionText: { fontSize: 13, fontFamily: "Inter_500Medium" },
+  errorRow: { flexDirection: "row", alignItems: "center", gap: 6, padding: 8, borderRadius: 8 },
+  errorText: { fontSize: 12, fontFamily: "Inter_400Regular", flex: 1 },
+  inputBar: {
+    flexDirection: "row", alignItems: "center", gap: 8,
+    borderRadius: 26, borderWidth: 1.5, paddingLeft: 16, paddingRight: 6, paddingVertical: 6,
+    minHeight: 52,
   },
-  sectionTitle: {
-    fontSize: 12,
-    fontFamily: "Inter_600SemiBold",
-    textTransform: "uppercase",
-    letterSpacing: 1,
-    marginBottom: 12,
+  textInput: {
+    flex: 1, fontSize: 15, fontFamily: "Inter_400Regular",
+    maxHeight: 100, paddingVertical: 4,
   },
-  quickScroll: { marginBottom: 28 },
-  quickContent: { paddingRight: 20, gap: 8, flexDirection: "row" },
-  quickChip: {
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: 20,
-    borderWidth: 1,
-  },
-  quickChipText: {
-    fontSize: 13,
-    fontFamily: "Inter_500Medium",
-  },
-  emptyState: {
-    alignItems: "center",
-    paddingVertical: 48,
-    gap: 12,
-  },
-  emptyTitle: {
-    fontSize: 14,
-    fontFamily: "Inter_400Regular",
-    textAlign: "center",
+  sendBtn: {
+    width: 38, height: 38, borderRadius: 19,
+    alignItems: "center", justifyContent: "center",
   },
 });

@@ -1,26 +1,23 @@
 import { useAuth } from "@clerk/expo";
 import { Redirect, Stack } from "expo-router";
-import { useEffect } from "react";
 import { setAuthTokenGetter } from "@workspace/api-client-react";
-import { useColors } from "@/hooks/useColors";
+import { useEffect } from "react";
 
 export default function HomeLayout() {
   const { isSignedIn, isLoaded, getToken } = useAuth();
-  const colors = useColors();
 
   useEffect(() => {
     setAuthTokenGetter(() => getToken());
   }, [getToken]);
 
   if (!isLoaded) return null;
-  if (!isSignedIn) return <Redirect href="/(auth)/sign-in" />;
+  if (!isSignedIn) return <Redirect href="/(auth)" />;
 
   return (
     <Stack
       screenOptions={{
         headerShown: false,
-        contentStyle: { backgroundColor: colors.background },
-        animation: "slide_from_right",
+        animation: "none",
       }}
     />
   );
