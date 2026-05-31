@@ -2,7 +2,12 @@ import { Feather } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Haptics from "expo-haptics";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   Animated,
   Dimensions,
@@ -15,8 +20,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Slide } from "@/context/VideoContext";
 
-const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get("window");
-const IMAGE_H = SCREEN_H * 0.52;
+const { width: W, height: H } = Dimensions.get("window");
 
 interface SlidePlayerProps {
   title: string;
@@ -25,9 +29,18 @@ interface SlidePlayerProps {
   onClose: () => void;
 }
 
-// Fallback: Unsplash free photos if Wikipedia image fails to load
-function getFallbackUrl(query: string, index: number) {
-  return `https://source.unsplash.com/900x600/?${encodeURIComponent(query)}&sig=${index + 42}`;
+// Ken Burns movement configs (scale + translate per scene)
+const KB = [
+  { s0: 1.0,  s1: 1.13, x0:  0,   x1:  22,  y0:  0,   y1: -12 },
+  { s0: 1.12, s1: 1.0,  x0: -20,  x1:  4,   y0:  8,   y1:  0  },
+  { s0: 1.0,  s1: 1.10, x0:  0,   x1: -18,  y0:  6,   y1: -6  },
+  { s0: 1.08, s1: 1.18, x0:  14,  x1: -8,   y0:  0,   y1:  0  },
+  { s0: 1.0,  s1: 1.12, x0:  0,   x1:  0,   y0:  12,  y1: -8  },
+  { s0: 1.1,  s1: 1.0,  x0: -12,  x1:  6,   y0: -4,   y1:  4  },
+];
+
+function getFallbackUrl(q: string, i: number) {
+  return `https://source.unsplash.com/900x600/?${encodeURIComponent(q)}&sig=${i + 77}`;
 }
 
 export function SlidePlayer({ title, slides, script, onClose }: SlidePlayerProps) {
@@ -38,100 +51,165 @@ export function SlidePlayer({ title, slides, script, onClose }: SlidePlayerProps
   const [imgErrors, setImgErrors] = useState<Record<number, boolean>>({});
 
   const totalDuration = slides.reduce((sum, s) => sum + s.duration, 0);
-  const progressAnim = useRef(new Animated.Value(0)).current;
-  const fadeAnim = useRef(new Animated.Value(1)).current;
-  const slideAnim = useRef(new Animated.Value(0)).current;
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const progressAnimRef = useRef<Animated.CompositeAnimation | null>(null);
+
+  // ── Ken Burns ─────────────────────────────────────────────────────────────
+  const kbScale  = useRef(new Animated.Value(1)).current;
+  const kbTransX = useRef(new Animated.Value(0)).current;
+  const kbTransY = useRef(new Animated.Value(0)).current;
+  const kbRef    = useRef<Animated.CompositeAnimation | null>(null);
+
+  // ── Text entrance ─────────────────────────────────────────────────────────
+  const sceneOpacity = useRef(new Animated.Value(0)).current;
+  const sceneScale   = useRef(new Animated.Value(0.75)).current;
+  const headingY     = useRef(new Animated.Value(28)).current;
+  const headingOp    = useRef(new Animated.Value(0)).current;
+  const barWidth     = useRef(new Animated.Value(0)).current;
+  const factY        = useRef(new Animated.Value(22)).current;
+  const factOp       = useRef(new Animated.Value(0)).current;
+  const narrOp       = useRef(new Animated.Value(0)).current;
+
+  // ── Slide-level fade ──────────────────────────────────────────────────────
+  const slideFade = useRef(new Animated.Value(1)).current;
+
+  // ── Progress (segmented) ──────────────────────────────────────────────────
+  const progressAnim = useRef(new Animated.Value(0)).current;
+  const progressRef  = useRef<Animated.CompositeAnimation | null>(null);
 
   const slide = slides[current];
+  const kb    = KB[current % KB.length];
 
-  // ── Speech ──────────────────────────────────────────────────────────────────
+  // ── Speech ────────────────────────────────────────────────────────────────
   const speak = useCallback((text: string) => {
     if (Platform.OS !== "web") return;
     if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
     window.speechSynthesis.cancel();
     const utt = new SpeechSynthesisUtterance(text);
-    utt.rate = 0.92;
+    utt.rate  = 0.91;
     utt.pitch = 1.0;
-    utt.lang = "en-US";
-    // Pick a natural-sounding voice if available
+    utt.lang  = "en-US";
     const voices = window.speechSynthesis.getVoices();
-    const preferred = voices.find(
-      (v) => v.lang.startsWith("en") && (v.name.includes("Google") || v.name.includes("Natural") || v.name.includes("Premium"))
+    const best = voices.find(
+      (v) => v.lang.startsWith("en") &&
+        (v.name.includes("Google") || v.name.includes("Natural") || v.name.includes("Premium"))
     );
-    if (preferred) utt.voice = preferred;
+    if (best) utt.voice = best;
     window.speechSynthesis.speak(utt);
   }, []);
 
   const stopSpeech = useCallback(() => {
-    if (Platform.OS === "web" && typeof window !== "undefined" && "speechSynthesis" in window) {
+    if (Platform.OS === "web" && typeof window !== "undefined" && "speechSynthesis" in window)
       window.speechSynthesis.cancel();
-    }
   }, []);
 
-  // ── Progress animation ───────────────────────────────────────────────────────
-  const startProgress = useCallback((fromFrac: number, toFrac: number, dur: number) => {
-    progressAnimRef.current?.stop();
-    progressAnim.setValue(fromFrac);
-    progressAnimRef.current = Animated.timing(progressAnim, {
-      toValue: toFrac,
-      duration: dur * 1000,
-      useNativeDriver: false,
+  // ── Run entrance animations for current slide ──────────────────────────────
+  const runEntrance = useCallback((duration: number) => {
+    // Reset text positions
+    sceneOpacity.setValue(0); sceneScale.setValue(0.75);
+    headingY.setValue(28);    headingOp.setValue(0);
+    barWidth.setValue(0);
+    factY.setValue(22);       factOp.setValue(0);
+    narrOp.setValue(0);
+
+    // Ken Burns
+    kbRef.current?.stop();
+    kbScale.setValue(kb.s0);  kbTransX.setValue(kb.x0);  kbTransY.setValue(kb.y0);
+    kbRef.current = Animated.parallel([
+      Animated.timing(kbScale,  { toValue: kb.s1, duration: duration * 1000, useNativeDriver: true }),
+      Animated.timing(kbTransX, { toValue: kb.x1, duration: duration * 1000, useNativeDriver: true }),
+      Animated.timing(kbTransY, { toValue: kb.y1, duration: duration * 1000, useNativeDriver: true }),
+    ]);
+    kbRef.current.start();
+
+    // Scene badge (pop in)
+    Animated.parallel([
+      Animated.spring(sceneOpacity, { toValue: 1, useNativeDriver: true, friction: 7 }),
+      Animated.spring(sceneScale,   { toValue: 1, useNativeDriver: true, friction: 7 }),
+    ]).start();
+
+    // Heading (slide up + fade) — delayed 200ms
+    Animated.sequence([
+      Animated.delay(200),
+      Animated.parallel([
+        Animated.spring(headingY,  { toValue: 0, useNativeDriver: true, friction: 8, tension: 65 }),
+        Animated.timing(headingOp, { toValue: 1, duration: 320, useNativeDriver: true }),
+      ]),
+    ]).start();
+
+    // Accent bar — delayed 380ms
+    Animated.sequence([
+      Animated.delay(380),
+      Animated.timing(barWidth, { toValue: 1, duration: 420, useNativeDriver: false }),
+    ]).start();
+
+    // Fact — delayed 520ms
+    Animated.sequence([
+      Animated.delay(520),
+      Animated.parallel([
+        Animated.spring(factY,   { toValue: 0, useNativeDriver: true, friction: 8, tension: 60 }),
+        Animated.timing(factOp,  { toValue: 1, duration: 350, useNativeDriver: true }),
+      ]),
+    ]).start();
+
+    // Narration hint — delayed 800ms
+    Animated.sequence([
+      Animated.delay(800),
+      Animated.timing(narrOp, { toValue: 1, duration: 400, useNativeDriver: true }),
+    ]).start();
+  }, [current, kb]);
+
+  // ── Transition to another slide ────────────────────────────────────────────
+  const transitionTo = useCallback((next: number) => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    kbRef.current?.stop();
+    stopSpeech();
+
+    Animated.timing(slideFade, { toValue: 0, duration: 300, useNativeDriver: true }).start(() => {
+      setCurrent(next);
+      slideFade.setValue(0);
+      Animated.timing(slideFade, { toValue: 1, duration: 300, useNativeDriver: true }).start();
     });
-    progressAnimRef.current.start();
+  }, [stopSpeech, slideFade]);
+
+  // ── Start progress for a segment ──────────────────────────────────────────
+  const startProgress = useCallback((from: number, to: number, dur: number) => {
+    progressRef.current?.stop();
+    progressAnim.setValue(from);
+    progressRef.current = Animated.timing(progressAnim, {
+      toValue: to, duration: dur * 1000, useNativeDriver: false,
+    });
+    progressRef.current.start();
   }, [progressAnim]);
 
-  // ── Slide transition ─────────────────────────────────────────────────────────
-  const transitionTo = useCallback((next: number) => {
-    stopSpeech();
-    if (timerRef.current) clearInterval(timerRef.current);
-
-    Animated.parallel([
-      Animated.timing(fadeAnim, { toValue: 0, duration: 250, useNativeDriver: true }),
-      Animated.timing(slideAnim, { toValue: -20, duration: 250, useNativeDriver: true }),
-    ]).start(() => {
-      setCurrent(next);
-      slideAnim.setValue(20);
-      fadeAnim.setValue(0);
-      Animated.parallel([
-        Animated.timing(fadeAnim, { toValue: 1, duration: 350, useNativeDriver: true }),
-        Animated.timing(slideAnim, { toValue: 0, duration: 350, useNativeDriver: true }),
-      ]).start();
-    });
-  }, [fadeAnim, slideAnim, stopSpeech]);
-
-  // ── Auto-advance ─────────────────────────────────────────────────────────────
+  // ── Main playback loop ─────────────────────────────────────────────────────
   useEffect(() => {
     if (!playing) {
       if (timerRef.current) clearInterval(timerRef.current);
+      kbRef.current?.stop();
       stopSpeech();
       return;
     }
 
-    // Speak narration for this slide
-    setTimeout(() => speak(slide.narration), 400);
+    const sl = slides[current];
+    const doneBefore = slides.slice(0, current).reduce((s, x) => s + x.duration, 0);
 
-    // Progress bar
-    const doneBefore = slides.slice(0, current).reduce((s, sl) => s + sl.duration, 0);
-    startProgress(doneBefore / totalDuration, (doneBefore + slide.duration) / totalDuration, slide.duration);
+    runEntrance(sl.duration);
+    startProgress(doneBefore / totalDuration, (doneBefore + sl.duration) / totalDuration, sl.duration);
+    setTimeout(() => speak(sl.narration), 500);
 
-    // Tick
-    let elapsed = 0;
+    let t = 0;
     timerRef.current = setInterval(() => {
-      elapsed += 0.1;
-      if (elapsed >= slide.duration) {
+      t += 0.1;
+      if (t >= sl.duration) {
         clearInterval(timerRef.current!);
         const next = current + 1;
         if (next < slides.length) {
           transitionTo(next);
-          const newDone = slides.slice(0, next).reduce((s, sl) => s + sl.duration, 0);
-          startProgress(newDone / totalDuration, (newDone + slides[next].duration) / totalDuration, slides[next].duration);
         } else {
-          setPlaying(false);
-          setElapsed(totalDuration);
           stopSpeech();
           progressAnim.setValue(1);
+          setElapsed(totalDuration);
+          setPlaying(false);
         }
       }
     }, 100);
@@ -141,188 +219,221 @@ export function SlidePlayer({ title, slides, script, onClose }: SlidePlayerProps
     };
   }, [current, playing]);
 
-  useEffect(() => {
-    return () => {
-      stopSpeech();
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
+  // After transition: re-enter (playing already true)
+  // The effect above runs on current change, so it auto-triggers.
+
+  useEffect(() => () => {
+    stopSpeech();
+    if (timerRef.current) clearInterval(timerRef.current);
   }, []);
 
-  // ── Controls ─────────────────────────────────────────────────────────────────
+  // ── Controls ──────────────────────────────────────────────────────────────
   const goNext = () => {
     if (current < slides.length - 1) {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      setElapsed(slides.slice(0, current + 1).reduce((s, sl) => s + sl.duration, 0));
       transitionTo(current + 1);
     }
   };
-
   const goPrev = () => {
     if (current > 0) {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      setElapsed(slides.slice(0, current - 1).reduce((s, sl) => s + sl.duration, 0));
       transitionTo(current - 1);
     }
   };
-
   const togglePlay = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setPlaying((p) => !p);
   };
-
   const restart = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    setElapsed(0);
-    transitionTo(0);
-    setPlaying(true);
+    setElapsed(0); setPlaying(false);
+    setCurrent(0);
+    setTimeout(() => setPlaying(true), 100);
   };
-
   const handleClose = () => {
+    kbRef.current?.stop();
     stopSpeech();
     if (timerRef.current) clearInterval(timerRef.current);
     onClose();
   };
 
   const isFinished = !playing && elapsed >= totalDuration;
-
-  const progressWidth = progressAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: ["0%", "100%"],
-  });
-
   const topPad = Platform.OS === "web" ? 20 : insets.top;
-  const botPad = Platform.OS === "web" ? 24 : insets.bottom + 8;
+  const botPad = Platform.OS === "web" ? 20 : insets.bottom + 4;
 
   const imgSrc = imgErrors[current]
     ? getFallbackUrl(slide.imageQuery, current)
-    : slide.imageUrl || getFallbackUrl(slide.imageQuery, current);
+    : (slide.imageUrl || getFallbackUrl(slide.imageQuery, current));
+
+  const accentBarW = barWidth.interpolate({ inputRange: [0, 1], outputRange: [0, 60] });
 
   return (
     <View style={styles.root}>
-      {/* ── IMAGE SECTION (top ~52%) ──────────────────────────────────────── */}
-      <Animated.View style={[styles.imageSection, { opacity: fadeAnim }]}>
+      {/* ── ANIMATED IMAGE (Ken Burns) ─────────────────────────────────── */}
+      <Animated.View style={[
+        styles.imageLayer,
+        { opacity: slideFade, transform: [
+          { scale: kbScale },
+          { translateX: kbTransX },
+          { translateY: kbTransY },
+        ]},
+      ]}>
         <Image
           source={{ uri: imgSrc }}
-          style={styles.image}
+          style={StyleSheet.absoluteFill}
           contentFit="cover"
-          transition={400}
           onError={() => setImgErrors((e) => ({ ...e, [current]: true }))}
         />
-        {/* Bottom gradient overlay on image */}
-        <LinearGradient
-          colors={["transparent", "#00000055", "#000000CC"]}
-          style={styles.imageGradient}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 0, y: 1 }}
-        />
-        {/* Top bar overlaid on image */}
-        <View style={[styles.topBar, { paddingTop: topPad }]}>
-          <Pressable onPress={handleClose} style={styles.closeBtn}>
-            <Feather name="x" size={20} color="#fff" />
-          </Pressable>
-          <View style={styles.topCenter}>
-            <Text style={styles.topTitle} numberOfLines={1}>{title}</Text>
-          </View>
-          <View style={styles.counterBadge}>
-            <Text style={styles.counterText}>{current + 1}/{slides.length}</Text>
-          </View>
+      </Animated.View>
+
+      {/* ── CINEMATIC GRADIENTS ───────────────────────────────────────── */}
+      {/* Top vignette */}
+      <LinearGradient
+        colors={["#000000CC", "#00000066", "transparent"]}
+        style={[styles.topGrad, { pointerEvents: "none" } as any]}
+        start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }}
+      />
+      {/* Bottom vignette — heavy for text readability */}
+      <LinearGradient
+        colors={["transparent", "#00000044", "#000000BB", "#000000EE", "#000"]}
+        style={[styles.bottomGrad, { pointerEvents: "none" } as any]}
+        start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }}
+      />
+
+      {/* ── TOP BAR ───────────────────────────────────────────────────── */}
+      <View style={[styles.topBar, { paddingTop: topPad }]}>
+        <Pressable onPress={handleClose} style={styles.closeBtn}>
+          <Feather name="x" size={19} color="#fff" />
+        </Pressable>
+        <View style={styles.topCenter}>
+          <Text style={styles.topTitle} numberOfLines={1}>{title}</Text>
         </View>
-        {/* Progress bar on image */}
-        <View style={styles.progressTrack}>
-          {slides.map((sl, i) => (
-            <View key={i} style={[styles.segmentTrack, { flex: sl.duration }]}>
-              <View
-                style={[
-                  styles.segmentFill,
-                  i < current ? styles.segmentDone :
-                  i === current ? {} :
-                  styles.segmentEmpty,
-                ]}
-              >
-                {i === current && (
-                  <Animated.View style={[styles.segmentActiveFill, { width: progressWidth }]} />
-                )}
-              </View>
-            </View>
-          ))}
+        <View style={styles.counterPill}>
+          <Text style={styles.counterText}>{current + 1} / {slides.length}</Text>
         </View>
-        {/* Image caption */}
+      </View>
+
+      {/* ── SEGMENTED PROGRESS BAR ────────────────────────────────────── */}
+      <View style={styles.progressRow}>
+        {slides.map((sl, i) => {
+          const doneBefore = slides.slice(0, i).reduce((s, x) => s + x.duration, 0);
+          return (
+            <Pressable
+              key={i}
+              style={[styles.segmentTrack, { flex: sl.duration }]}
+              onPress={() => transitionTo(i)}
+            >
+              {i < current ? (
+                <View style={[styles.segFill, styles.segDone]} />
+              ) : i === current ? (
+                <View style={[styles.segFill, styles.segEmpty]}>
+                  <Animated.View
+                    style={[
+                      styles.segActive,
+                      {
+                        width: progressAnim.interpolate({
+                          inputRange: [doneBefore / totalDuration, (doneBefore + sl.duration) / totalDuration],
+                          outputRange: ["0%", "100%"],
+                          extrapolate: "clamp",
+                        }),
+                      },
+                    ]}
+                  />
+                </View>
+              ) : (
+                <View style={[styles.segFill, styles.segEmpty]} />
+              )}
+            </Pressable>
+          );
+        })}
+      </View>
+
+      {/* ── ANIMATED CONTENT ──────────────────────────────────────────── */}
+      <Animated.View style={[styles.contentArea, { opacity: slideFade }]}>
+
+        {/* Scene badge — pop in */}
+        <Animated.View style={[styles.sceneBadge, {
+          opacity: sceneOpacity,
+          transform: [{ scale: sceneScale }],
+        }]}>
+          <View style={styles.sceneDot} />
+          <Text style={styles.sceneBadgeText}>Scene {current + 1}</Text>
+        </Animated.View>
+
+        {/* Heading — slides up */}
+        <Animated.Text
+          style={[styles.heading, {
+            opacity: headingOp,
+            transform: [{ translateY: headingY }],
+          }]}
+          numberOfLines={3}
+        >
+          {slide.heading}
+        </Animated.Text>
+
+        {/* Animated accent bar */}
+        <View style={styles.accentBarTrack}>
+          <Animated.View style={[styles.accentBar, { width: accentBarW }]} />
+        </View>
+
+        {/* Fact — slides up after bar */}
+        <Animated.Text
+          style={[styles.fact, {
+            opacity: factOp,
+            transform: [{ translateY: factY }],
+          }]}
+          numberOfLines={4}
+        >
+          {slide.fact}
+        </Animated.Text>
+
+        {/* Narration row — fades in last */}
+        <Animated.View style={[styles.narrRow, { opacity: narrOp }]}>
+          <NarratingDots playing={playing} />
+          <Text style={styles.narrText} numberOfLines={2}>{slide.narration}</Text>
+        </Animated.View>
+
+        {/* Caption */}
         {slide.imageCaption ? (
-          <View style={styles.captionBox}>
-            <Feather name="camera" size={10} color="#ffffffBB" />
+          <Animated.View style={[styles.captionRow, { opacity: narrOp }]}>
+            <Feather name="camera" size={9} color="#ffffff88" />
             <Text style={styles.captionText} numberOfLines={1}>{slide.imageCaption}</Text>
-          </View>
+          </Animated.View>
         ) : null}
       </Animated.View>
 
-      {/* ── CONTENT SECTION (bottom ~48%) ────────────────────────────────── */}
-      <View style={styles.contentSection}>
-        <Animated.View
-          style={[
-            styles.contentInner,
-            { opacity: fadeAnim, transform: [{ translateY: slideAnim }] },
-          ]}
-        >
-          {/* Scene label */}
-          <View style={styles.sceneRow}>
-            <View style={styles.sceneBadge}>
-              <Feather name="play-circle" size={11} color="#6C63FF" />
-              <Text style={styles.sceneBadgeText}>Scene {current + 1}</Text>
-            </View>
-            {slide.imageCaption ? (
-              <View style={styles.wikiBadge}>
-                <Text style={styles.wikiBadgeText}>📖 Wikipedia</Text>
-              </View>
-            ) : null}
-          </View>
-
-          {/* Heading */}
-          <Text style={styles.heading}>{slide.heading}</Text>
-
-          {/* Divider */}
-          <View style={styles.divider} />
-
-          {/* Fact */}
-          <Text style={styles.fact}>{slide.fact}</Text>
-
-          {/* Narration cue */}
-          <View style={styles.narrationRow}>
-            <Feather name={playing ? "volume-2" : "volume-x"} size={13} color="#6C63FF" />
-            <Text style={styles.narrationText} numberOfLines={2}>{slide.narration}</Text>
-          </View>
-        </Animated.View>
-
-        {/* ── Dot indicators ── */}
+      {/* ── CONTROLS ──────────────────────────────────────────────────── */}
+      <View style={[styles.controls, { paddingBottom: botPad }]}>
+        {/* Dot tray */}
         <View style={styles.dotsRow}>
           {slides.map((_, i) => (
             <Pressable key={i} onPress={() => transitionTo(i)} style={styles.dotHit}>
-              <View style={[styles.dot, i === current && styles.dotActive, i < current && styles.dotDone]} />
+              <Animated.View style={[
+                styles.dot,
+                i === current && styles.dotActive,
+                i < current  && styles.dotDone,
+              ]} />
             </Pressable>
           ))}
         </View>
 
-        {/* ── Controls ── */}
-        <View style={[styles.controls, { paddingBottom: botPad }]}>
+        {/* Control buttons */}
+        <View style={styles.ctrlRow}>
           <Pressable
             onPress={goPrev}
-            disabled={current === 0 && !isFinished}
-            style={[styles.ctrlBtn, current === 0 && !isFinished && styles.ctrlDisabled]}
+            disabled={current === 0}
+            style={[styles.sideBtn, current === 0 && { opacity: 0.28 }]}
           >
-            <Feather name="skip-back" size={22} color="#fff" />
+            <Feather name="skip-back" size={21} color="#fff" />
           </Pressable>
 
           <Pressable onPress={isFinished ? restart : togglePlay} style={styles.playBtn}>
-            <LinearGradient
-              colors={["#6C63FF", "#7C3AED"]}
-              style={styles.playBtnGrad}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-            >
+            <LinearGradient colors={["#6C63FF", "#A855F7"]} style={styles.playGrad} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}>
               <Feather
                 name={isFinished ? "rotate-ccw" : playing ? "pause" : "play"}
                 size={26}
                 color="#fff"
-                style={!isFinished && !playing ? { marginLeft: 3 } : undefined}
+                style={!playing && !isFinished ? { marginLeft: 3 } : undefined}
               />
             </LinearGradient>
           </Pressable>
@@ -330,9 +441,9 @@ export function SlidePlayer({ title, slides, script, onClose }: SlidePlayerProps
           <Pressable
             onPress={goNext}
             disabled={current === slides.length - 1}
-            style={[styles.ctrlBtn, current === slides.length - 1 && styles.ctrlDisabled]}
+            style={[styles.sideBtn, current === slides.length - 1 && { opacity: 0.28 }]}
           >
-            <Feather name="skip-forward" size={22} color="#fff" />
+            <Feather name="skip-forward" size={21} color="#fff" />
           </Pressable>
         </View>
       </View>
@@ -340,115 +451,164 @@ export function SlidePlayer({ title, slides, script, onClose }: SlidePlayerProps
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: "#080810" },
+// ── Pulsing audio-wave dots shown while narration plays ──────────────────────
+function NarratingDots({ playing }: { playing: boolean }) {
+  const anim1 = useRef(new Animated.Value(0.3)).current;
+  const anim2 = useRef(new Animated.Value(0.3)).current;
+  const anim3 = useRef(new Animated.Value(0.3)).current;
+  const loopRef = useRef<Animated.CompositeAnimation | null>(null);
 
-  // Image section
-  imageSection: {
-    height: IMAGE_H,
-    position: "relative",
+  useEffect(() => {
+    if (!playing) {
+      loopRef.current?.stop();
+      anim1.setValue(0.3); anim2.setValue(0.3); anim3.setValue(0.3);
+      return;
+    }
+    const pulse = (anim: Animated.Value, delay: number) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.delay(delay),
+          Animated.timing(anim, { toValue: 1,   duration: 300, useNativeDriver: true }),
+          Animated.timing(anim, { toValue: 0.3, duration: 300, useNativeDriver: true }),
+        ])
+      );
+    loopRef.current = Animated.parallel([pulse(anim1, 0), pulse(anim2, 150), pulse(anim3, 300)]);
+    loopRef.current.start();
+    return () => loopRef.current?.stop();
+  }, [playing]);
+
+  return (
+    <View style={narrStyles.row}>
+      {[anim1, anim2, anim3].map((a, i) => (
+        <Animated.View
+          key={i}
+          style={[narrStyles.bar, {
+            opacity: a,
+            transform: [{
+              scaleY: a.interpolate({ inputRange: [0.3, 1], outputRange: [0.5, 1] }),
+            }],
+          }]}
+        />
+      ))}
+    </View>
+  );
+}
+
+const narrStyles = StyleSheet.create({
+  row: { flexDirection: "row", alignItems: "center", gap: 2, marginTop: 2 },
+  bar: { width: 3, height: 14, borderRadius: 2, backgroundColor: "#6C63FF" },
+});
+
+// ── Styles ────────────────────────────────────────────────────────────────────
+const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: "#000" },
+
+  imageLayer: {
+    ...StyleSheet.absoluteFillObject,
     overflow: "hidden",
-    backgroundColor: "#111",
   },
-  image: { width: "100%", height: "100%" },
-  imageGradient: {
-    position: "absolute", bottom: 0, left: 0, right: 0, height: IMAGE_H * 0.45,
-  },
-  topBar: {
+
+  topGrad: {
     position: "absolute", top: 0, left: 0, right: 0,
+    height: H * 0.3, zIndex: 2, pointerEvents: "none",
+  } as any,
+  bottomGrad: {
+    position: "absolute", bottom: 0, left: 0, right: 0,
+    height: H * 0.65, zIndex: 2, pointerEvents: "none",
+  } as any,
+
+  // Top bar
+  topBar: {
+    position: "absolute", top: 0, left: 0, right: 0, zIndex: 10,
     flexDirection: "row", alignItems: "center",
-    paddingHorizontal: 16, paddingBottom: 12,
-    zIndex: 10,
+    paddingHorizontal: 16, paddingBottom: 10,
   },
   closeBtn: {
     width: 34, height: 34, borderRadius: 17,
-    backgroundColor: "#00000055",
-    borderWidth: 1, borderColor: "#ffffff33",
+    backgroundColor: "#ffffff18",
+    borderWidth: 1, borderColor: "#ffffff22",
     alignItems: "center", justifyContent: "center",
   },
   topCenter: { flex: 1, paddingHorizontal: 10 },
-  topTitle: { color: "#fff", fontSize: 14, fontFamily: "Inter_600SemiBold", textAlign: "center" },
-  counterBadge: {
-    backgroundColor: "#00000066", borderRadius: 12,
+  topTitle: { color: "#ffffffDD", fontSize: 13, fontFamily: "Inter_600SemiBold", textAlign: "center" },
+  counterPill: {
+    backgroundColor: "#ffffff15", borderRadius: 12,
     paddingHorizontal: 10, paddingVertical: 4,
     borderWidth: 1, borderColor: "#ffffff22",
   },
   counterText: { color: "#ffffffCC", fontSize: 12, fontFamily: "Inter_500Medium" },
 
-  // Segmented progress bar
-  progressTrack: {
-    position: "absolute", bottom: 38, left: 16, right: 16,
-    flexDirection: "row", gap: 3, height: 3,
+  // Progress
+  progressRow: {
+    position: "absolute", top: Platform.OS === "web" ? 62 : 80, left: 16, right: 16,
+    flexDirection: "row", gap: 4, height: 3, zIndex: 10,
   },
   segmentTrack: { height: 3, borderRadius: 2, overflow: "hidden" },
-  segmentFill: { flex: 1, backgroundColor: "#ffffff44", borderRadius: 2 },
-  segmentDone: { backgroundColor: "#ffffffCC" },
-  segmentEmpty: { backgroundColor: "#ffffff33" },
-  segmentActiveFill: { height: 3, backgroundColor: "#fff", position: "absolute", left: 0, top: 0 },
+  segFill: { flex: 1, borderRadius: 2 },
+  segDone: { backgroundColor: "#ffffffCC" },
+  segEmpty: { backgroundColor: "#ffffff28" },
+  segActive: { height: 3, backgroundColor: "#fff", position: "absolute", left: 0, top: 0, borderRadius: 2 },
 
-  captionBox: {
-    position: "absolute", bottom: 12, left: 14,
-    flexDirection: "row", alignItems: "center", gap: 5,
+  // Content
+  contentArea: {
+    position: "absolute", bottom: 140, left: 0, right: 0,
+    paddingHorizontal: 22, zIndex: 10,
   },
-  captionText: { color: "#ffffffBB", fontSize: 10, fontFamily: "Inter_400Regular", maxWidth: SCREEN_W * 0.75 },
-
-  // Content section
-  contentSection: {
-    flex: 1,
-    backgroundColor: "#080810",
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    justifyContent: "space-between",
-  },
-  contentInner: { flex: 1 },
-  sceneRow: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 10 },
   sceneBadge: {
-    flexDirection: "row", alignItems: "center", gap: 5,
-    backgroundColor: "#6C63FF22", paddingHorizontal: 10, paddingVertical: 5,
-    borderRadius: 20, borderWidth: 1, borderColor: "#6C63FF44",
+    flexDirection: "row", alignItems: "center", gap: 6,
+    alignSelf: "flex-start",
+    backgroundColor: "#6C63FF30",
+    borderWidth: 1, borderColor: "#6C63FF55",
+    borderRadius: 20, paddingHorizontal: 12, paddingVertical: 5,
+    marginBottom: 14,
   },
-  sceneBadgeText: { color: "#6C63FF", fontSize: 11, fontFamily: "Inter_600SemiBold" },
-  wikiBadge: {
-    backgroundColor: "#ffffff0F", paddingHorizontal: 8, paddingVertical: 4,
-    borderRadius: 12, borderWidth: 1, borderColor: "#ffffff1A",
-  },
-  wikiBadgeText: { color: "#ffffffAA", fontSize: 10, fontFamily: "Inter_400Regular" },
+  sceneDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: "#6C63FF" },
+  sceneBadgeText: { color: "#A89BFF", fontSize: 11, fontFamily: "Inter_600SemiBold", letterSpacing: 0.5 },
 
   heading: {
-    fontSize: 22, fontFamily: "Inter_700Bold", color: "#FFFFFF",
-    lineHeight: 28, letterSpacing: -0.3, marginBottom: 10,
-  },
-  divider: { height: 1, backgroundColor: "#ffffff14", marginBottom: 10 },
-  fact: {
-    fontSize: 14, fontFamily: "Inter_400Regular", color: "#D0D2E8",
-    lineHeight: 22,
-  },
-  narrationRow: {
-    flexDirection: "row", alignItems: "flex-start", gap: 7, marginTop: 10,
-  },
-  narrationText: {
-    flex: 1, fontSize: 12, fontFamily: "Inter_400Regular",
-    color: "#8890B0", lineHeight: 18, fontStyle: "italic",
+    fontSize: 30, fontFamily: "Inter_700Bold", color: "#FFFFFF",
+    lineHeight: 36, letterSpacing: -0.4, marginBottom: 10,
   },
 
-  // Dots
-  dotsRow: {
-    flexDirection: "row", justifyContent: "center", gap: 4,
-    paddingVertical: 6,
+  accentBarTrack: { marginBottom: 12 },
+  accentBar: { height: 3, borderRadius: 2, backgroundColor: "#6C63FF" },
+
+  fact: {
+    fontSize: 15, fontFamily: "Inter_400Regular", color: "#E0E2F0",
+    lineHeight: 23, marginBottom: 10,
   },
-  dotHit: { padding: 4 },
-  dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: "#ffffff22" },
-  dotActive: { backgroundColor: "#6C63FF", width: 22, borderRadius: 3 },
-  dotDone: { backgroundColor: "#6C63FF66" },
+
+  narrRow: {
+    flexDirection: "row", alignItems: "flex-start", gap: 8, marginBottom: 6,
+  },
+  narrText: {
+    flex: 1, fontSize: 12, color: "#9095B4", fontFamily: "Inter_400Regular",
+    lineHeight: 18, fontStyle: "italic",
+  },
+
+  captionRow: {
+    flexDirection: "row", alignItems: "center", gap: 5,
+  },
+  captionText: { color: "#ffffff55", fontSize: 10, fontFamily: "Inter_400Regular" },
 
   // Controls
-  controls: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 28 },
-  ctrlBtn: {
-    width: 48, height: 48, borderRadius: 24,
-    backgroundColor: "#ffffff0F", borderWidth: 1, borderColor: "#ffffff1A",
+  controls: {
+    position: "absolute", bottom: 0, left: 0, right: 0, zIndex: 10,
+    paddingHorizontal: 20, gap: 12,
+  },
+  dotsRow: { flexDirection: "row", justifyContent: "center", gap: 5 },
+  dotHit: { padding: 5 },
+  dot: { width: 5, height: 5, borderRadius: 2.5, backgroundColor: "#ffffff33" },
+  dotActive: { width: 22, backgroundColor: "#6C63FF", borderRadius: 3 },
+  dotDone: { backgroundColor: "#6C63FF66" },
+
+  ctrlRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 24 },
+  sideBtn: {
+    width: 46, height: 46, borderRadius: 23,
+    backgroundColor: "#ffffff12",
+    borderWidth: 1, borderColor: "#ffffff1A",
     alignItems: "center", justifyContent: "center",
   },
-  ctrlDisabled: { opacity: 0.25 },
-  playBtn: { width: 64, height: 64, borderRadius: 32, overflow: "hidden" },
-  playBtnGrad: { flex: 1, alignItems: "center", justifyContent: "center" },
+  playBtn: { width: 66, height: 66, borderRadius: 33, overflow: "hidden" },
+  playGrad: { flex: 1, alignItems: "center", justifyContent: "center" },
 });
