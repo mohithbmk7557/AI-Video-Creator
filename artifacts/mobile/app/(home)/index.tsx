@@ -260,9 +260,9 @@ function VideoHistoryItem({
       >
         {/* Thumbnail */}
         <View style={styles.cardThumb}>
-          {video.slides[0]?.imageUrl ? (
+          {(video.slides[0]?.imageUrls?.[0] ?? video.slides[0]?.imageUrl) ? (
             <Image
-              source={{ uri: video.slides[0].imageUrl }}
+              source={{ uri: video.slides[0]?.imageUrls?.[0] ?? (video.slides[0] as any)?.imageUrl }}
               style={StyleSheet.absoluteFill}
               contentFit="cover"
             />
