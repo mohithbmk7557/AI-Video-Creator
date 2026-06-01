@@ -12,11 +12,14 @@ export interface Slide {
   id: string;
   duration: number;
   heading: string;
-  fact: string;
-  narration: string;
-  imageQuery: string;
-  imageUrl: string;       // Real photo URL (Wikipedia or fallback)
-  imageCaption: string;   // Photo caption / source label
+  keyPhrase: string;       // 3–5 bold words for large center reveal
+  fact: string;            // full educational fact
+  narration: string;       // spoken narration text
+  imageQueries: string[];  // [shot1 query, shot2 query, shot3 query]
+  imageUrls: string[];     // [shot1 url, shot2 url, shot3 url]
+  imageCaption: string;
+  stat: string;            // e.g. "2,300 miles"
+  statLabel: string;       // e.g. "of wall constructed"
   accent: string;
 }
 
@@ -42,7 +45,7 @@ const VideoContext = createContext<VideoContextValue>({
   clearHistory: async () => {},
 });
 
-const STORAGE_KEY = "@aivid_history_v3";
+const STORAGE_KEY = "@aivid_history_v4";
 
 export function VideoProvider({ children }: { children: ReactNode }) {
   const [history, setHistory] = useState<VideoItem[]>([]);
