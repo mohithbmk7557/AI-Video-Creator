@@ -1,7 +1,7 @@
 import { Feather } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Haptics from "expo-haptics";
-import { useRouter } from "expo-router";
+import { useRouter, type Href } from "expo-router";
 import { useSignIn, useSignUp } from "@clerk/expo";
 import React, { useState } from "react";
 import {
@@ -36,8 +36,9 @@ export default function AuthScreen() {
   const [verifyStep, setVerifyStep] = useState(false);
   const [code, setCode] = useState("");
 
-  const { signIn, setActive: setActiveSignIn, isLoaded: signInLoaded } = useSignIn();
-  const { signUp, setActive: setActiveSignUp, isLoaded: signUpLoaded } = useSignUp();
+  // Clerk v3 hooks — no isLoaded/setActive, uses signIn.password() + signIn.finalize()
+  const { signIn } = useSignIn();
+  const { signUp } = useSignUp();
 
   const topPad = Platform.OS === "web" ? 60 : insets.top;
   const bottomPad = Platform.OS === "web" ? 30 : insets.bottom;
@@ -48,53 +49,83 @@ export default function AuthScreen() {
 
   const switchTab = (t: Tab) => { setTab(t); reset(); };
 
+  // ── Sign In (Clerk v3) ─────────────────────────────────────────────────────
   const handleSignIn = async () => {
-    if (!signInLoaded || !signIn || loading) return;
+    if (!signIn || loading) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setLoading(true); setError(null);
     try {
-      const result = await signIn.create({ strategy: "password", identifier: email, password });
-      if (result.status === "complete") {
-        await setActiveSignIn({ session: result.createdSessionId });
-        router.replace("/(home)");
+      const { error: signInError } = await signIn.password({ emailAddress: email, password });
+      if (signInError) {
+        setError(signInError.message ?? "Sign-in failed.");
+        return;
+      }
+      if (signIn.status === "complete") {
+        await signIn.finalize({
+          navigate: ({ decorateUrl }) => {
+            const url = decorateUrl("/");
+            if (url.startsWith("http")) {
+              if (typeof window !== "undefined") window.location.href = url;
+            } else {
+              router.replace(url as Href);
+            }
+          },
+        });
       } else {
         setError("Sign-in incomplete. Please try again.");
       }
     } catch (e: any) {
-      setError(e?.errors?.[0]?.longMessage ?? e?.errors?.[0]?.message ?? "Sign-in failed.");
+      const msg = e?.errors?.[0]?.longMessage ?? e?.errors?.[0]?.message ?? e?.message ?? "Sign-in failed.";
+      setError(msg);
     } finally {
       setLoading(false);
     }
   };
 
+  // ── Sign Up Step 1: create account (Clerk v3) ─────────────────────────────
   const handleSignUp = async () => {
-    if (!signUpLoaded || !signUp || loading) return;
+    if (!signUp || loading) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setLoading(true); setError(null);
     try {
-      await signUp.create({ emailAddress: email, password });
-      await signUp.prepareEmailAddressVerification({ strategy: "email_code" });
+      const { error: signUpError } = await signUp.password({ emailAddress: email, password });
+      if (signUpError) {
+        setError(signUpError.message ?? "Sign-up failed.");
+        return;
+      }
+      await signUp.verifications.sendEmailCode();
       setVerifyStep(true);
     } catch (e: any) {
-      setError(e?.errors?.[0]?.longMessage ?? e?.errors?.[0]?.message ?? "Sign-up failed.");
+      const msg = e?.errors?.[0]?.longMessage ?? e?.errors?.[0]?.message ?? e?.message ?? "Sign-up failed.";
+      setError(msg);
     } finally {
       setLoading(false);
     }
   };
 
+  // ── Sign Up Step 2: verify email code (Clerk v3) ──────────────────────────
   const handleVerify = async () => {
-    if (!signUpLoaded || !signUp || loading) return;
+    if (!signUp || loading) return;
     setLoading(true); setError(null);
     try {
-      const result = await signUp.attemptEmailAddressVerification({ code });
-      if (result.status === "complete") {
-        await setActiveSignUp({ session: result.createdSessionId });
-        router.replace("/(home)");
+      await signUp.verifications.verifyEmailCode({ code });
+      if (signUp.status === "complete") {
+        await signUp.finalize({
+          navigate: ({ decorateUrl }) => {
+            const url = decorateUrl("/");
+            if (url.startsWith("http")) {
+              if (typeof window !== "undefined") window.location.href = url;
+            } else {
+              router.replace(url as Href);
+            }
+          },
+        });
       } else {
         setError("Verification failed. Please try again.");
       }
     } catch (e: any) {
-      setError(e?.errors?.[0]?.longMessage ?? e?.errors?.[0]?.message ?? "Invalid code.");
+      const msg = e?.errors?.[0]?.longMessage ?? e?.errors?.[0]?.message ?? e?.message ?? "Invalid code.";
+      setError(msg);
     } finally {
       setLoading(false);
     }
@@ -132,14 +163,17 @@ export default function AuthScreen() {
             ))}
           </View>
 
-          {/* Verify step for sign-up */}
+          {/* Verify step (sign-up only) */}
           {verifyStep ? (
             <>
               <Text style={[styles.verifyMsg, { color: colors.mutedForeground }]}>
                 We sent a 6-digit code to {email}
               </Text>
               <TextInput
-                style={[styles.input, { backgroundColor: colors.input, color: colors.foreground, borderColor: colors.border, textAlign: "center", letterSpacing: 8, fontSize: 22 }]}
+                style={[styles.input, {
+                  backgroundColor: colors.input, color: colors.foreground,
+                  borderColor: colors.border, textAlign: "center", letterSpacing: 8, fontSize: 22,
+                }]}
                 value={code}
                 onChangeText={(v) => { setCode(v); setError(null); }}
                 placeholder="000000"
@@ -149,8 +183,17 @@ export default function AuthScreen() {
                 autoFocus
               />
               {error && <ErrorBanner error={error} colors={colors} />}
-              <PrimaryButton label="Verify & Continue" onPress={handleVerify} loading={loading} disabled={code.length < 6} colors={colors} />
-              <Pressable onPress={() => signUp?.prepareEmailAddressVerification({ strategy: "email_code" })} style={styles.resendBtn}>
+              <PrimaryButton
+                label="Verify & Continue"
+                onPress={handleVerify}
+                loading={loading}
+                disabled={code.length < 6}
+                colors={colors}
+              />
+              <Pressable
+                onPress={() => signUp?.verifications.sendEmailCode()}
+                style={styles.resendBtn}
+              >
                 <Text style={[styles.resendText, { color: colors.mutedForeground }]}>Resend code</Text>
               </Pressable>
             </>
@@ -176,7 +219,10 @@ export default function AuthScreen() {
                 <Text style={[styles.label, { color: colors.mutedForeground }]}>Password</Text>
                 <View>
                   <TextInput
-                    style={[styles.input, { backgroundColor: colors.input, color: colors.foreground, borderColor: colors.border, paddingRight: 52 }]}
+                    style={[styles.input, {
+                      backgroundColor: colors.input, color: colors.foreground,
+                      borderColor: colors.border, paddingRight: 52,
+                    }]}
                     value={password}
                     onChangeText={(v) => { setPassword(v); setError(null); }}
                     placeholder={tab === "signup" ? "Min 8 characters" : "••••••••"}
@@ -198,6 +244,9 @@ export default function AuthScreen() {
                 disabled={!email || !password}
                 colors={colors}
               />
+
+              {/* Required by Clerk for bot protection on sign-up */}
+              {tab === "signup" && <View nativeID="clerk-captcha" />}
             </>
           )}
         </ScrollView>
@@ -221,11 +270,19 @@ function PrimaryButton({ label, onPress, loading, disabled, colors }: {
 }) {
   return (
     <Pressable
-      style={({ pressed }) => [styles.primaryBtn, { backgroundColor: colors.primary }, (loading || disabled) && { opacity: 0.5 }, pressed && { opacity: 0.85 }]}
+      style={({ pressed }) => [
+        styles.primaryBtn,
+        { backgroundColor: colors.primary },
+        (loading || disabled) && { opacity: 0.5 },
+        pressed && { opacity: 0.85 },
+      ]}
       onPress={onPress}
       disabled={loading || disabled}
     >
-      {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>{label}</Text>}
+      {loading
+        ? <ActivityIndicator color="#fff" />
+        : <Text style={styles.btnText}>{label}</Text>
+      }
     </Pressable>
   );
 }
