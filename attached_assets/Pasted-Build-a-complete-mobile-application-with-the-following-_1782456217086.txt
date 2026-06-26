@@ -1,0 +1,73 @@
+Build a complete mobile application with the following stack and requirements:
+
+TECH STACK:
+- Frontend: Flutter (Dart)
+- Backend: Python (FastAPI)
+- Database: Supabase (PostgreSQL + Auth)
+
+PROJECT STRUCTURE:
+Create two separate folders:
+- /frontend → Flutter app
+- /backend → Python FastAPI server
+
+---
+
+BACKEND (Python + FastAPI):
+- POST /auth/signup → register user with email & password
+- POST /auth/login → login and return JWT token
+- POST /auth/forgot-password → send password reset email via Supabase
+- POST /video/generate → accepts a topic string, returns a video URL (mock response for now)
+- GET /video/history → returns list of past generated videos for the user
+- Use python-jose for JWT, passlib for password hashing, supabase-py for database
+
+---
+
+FRONTEND (Flutter + Dart):
+Build these screens:
+
+1. LOGIN SCREEN:
+- Email and password text fields
+- "Login" button
+- "Don't have an account? Sign Up" link
+- "Forgot Password?" clickable text link below the password field → navigates to Forgot Password screen
+- Clean minimal UI similar to Claude.ai (white background, rounded input fields, subtle borders)
+
+2. SIGN UP SCREEN:
+- Name, Email, Password, Confirm Password fields
+- "Create Account" button
+- "Already have an account? Login" link
+
+3. FORGOT PASSWORD SCREEN:
+- Email input field
+- "Send Reset Link" button
+- On success show: "Check your email for a reset link"
+- Back arrow to return to Login
+
+4. HOME / CHAT SCREEN (after login):
+- Top app bar with app name and logout icon
+- Text input at the bottom (like Claude's chat bar) where user types a topic
+- "Generate Video" send button
+- Response area shows a loading indicator while video is being generated
+- Once done, display the video in a built-in video player (use video_player package)
+
+DESIGN RULES:
+- White background throughout
+- Primary color: deep indigo (#3D35A8)
+- Rounded corners on all inputs and buttons (border radius 12)
+- Font: default Flutter sans-serif, clean and minimal
+- No gradients, no heavy shadows
+- All screens must be mobile responsive
+
+---
+
+ADDITIONAL REQUIREMENTS:
+- Use flutter_secure_storage to store JWT token locally
+- Use http package for API calls to FastAPI backend
+- Use provider or riverpod for state management
+- Add a loading spinner during all API calls
+- Show proper error messages for wrong credentials, network errors, etc.
+- Use video_player flutter package for playing generated videos
+
+---
+
+Start by generating the full folder structure, then the FastAPI backend files, then all Flutter screens in order.
