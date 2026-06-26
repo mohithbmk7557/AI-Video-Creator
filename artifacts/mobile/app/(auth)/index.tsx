@@ -61,16 +61,20 @@ export default function AuthScreen() {
 
   // ── Sign In ────────────────────────────────────────────────────────────────
   const handleSignIn = async () => {
-    if (!signInLoaded || !signIn || loading) return;
+    if (loading) return;
+    if (!signInLoaded || !signIn) {
+      setError("Authentication is still loading. Please wait a moment and try again.");
+      return;
+    }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setLoading(true); setError(null);
     try {
       const result = await signIn.create({ identifier: email, password });
       if (result.status === "complete") {
         await setSignInActive({ session: result.createdSessionId });
-        router.replace("/");
+        router.replace("/(home)" as any);
       } else {
-        setError("Sign-in could not be completed. Please try again.");
+        setError(`Sign-in incomplete (status: ${result.status}). Please try again.`);
       }
     } catch (e: any) {
       const msg =
@@ -86,7 +90,11 @@ export default function AuthScreen() {
 
   // ── Sign Up – Step 1: create account ──────────────────────────────────────
   const handleSignUp = async () => {
-    if (!signUpLoaded || !signUp || loading) return;
+    if (loading) return;
+    if (!signUpLoaded || !signUp) {
+      setError("Authentication is still loading. Please wait a moment and try again.");
+      return;
+    }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setLoading(true); setError(null);
     try {
@@ -98,7 +106,7 @@ export default function AuthScreen() {
         e?.errors?.[0]?.longMessage ??
         e?.errors?.[0]?.message ??
         e?.message ??
-        "Sign-up failed.";
+        "Sign-up failed. Please try again.";
       setError(msg);
     } finally {
       setLoading(false);
@@ -107,15 +115,19 @@ export default function AuthScreen() {
 
   // ── Sign Up – Step 2: verify email code ───────────────────────────────────
   const handleVerify = async () => {
-    if (!signUpLoaded || !signUp || loading) return;
+    if (loading) return;
+    if (!signUpLoaded || !signUp) {
+      setError("Authentication is still loading. Please wait a moment and try again.");
+      return;
+    }
     setLoading(true); setError(null);
     try {
       const result = await signUp.attemptEmailAddressVerification({ code });
       if (result.status === "complete") {
         await setSignUpActive({ session: result.createdSessionId });
-        router.replace("/");
+        router.replace("/(home)" as any);
       } else {
-        setError("Verification failed. Please try again.");
+        setError(`Verification incomplete (status: ${result.status}). Please try again.`);
       }
     } catch (e: any) {
       const msg =
@@ -131,7 +143,11 @@ export default function AuthScreen() {
 
   // ── Forgot Password – Step 1: send reset code ─────────────────────────────
   const handleForgotSend = async () => {
-    if (!signInLoaded || !signIn || loading) return;
+    if (loading) return;
+    if (!signInLoaded || !signIn) {
+      setError("Authentication is still loading. Please wait a moment and try again.");
+      return;
+    }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setLoading(true); setError(null);
     try {
@@ -155,7 +171,11 @@ export default function AuthScreen() {
 
   // ── Forgot Password – Step 2: verify code + set new password ──────────────
   const handleForgotReset = async () => {
-    if (!signInLoaded || !signIn || loading) return;
+    if (loading) return;
+    if (!signInLoaded || !signIn) {
+      setError("Authentication is still loading. Please wait a moment and try again.");
+      return;
+    }
     setLoading(true); setError(null);
     try {
       const result = await signIn.attemptFirstFactor({
@@ -165,9 +185,9 @@ export default function AuthScreen() {
       });
       if (result.status === "complete") {
         await setSignInActive({ session: result.createdSessionId });
-        router.replace("/");
+        router.replace("/(home)" as any);
       } else {
-        setError("Password reset failed. Please try again.");
+        setError(`Password reset incomplete (status: ${result.status}). Please try again.`);
       }
     } catch (e: any) {
       const msg =
@@ -402,7 +422,7 @@ export default function AuthScreen() {
                     label={mode === "signin" ? "Sign In" : "Create Account"}
                     onPress={mode === "signin" ? handleSignIn : handleSignUp}
                     loading={loading}
-                    disabled={!email || !password}
+                    disabled={!email || !password || (mode === "signin" ? !signInLoaded : !signUpLoaded)}
                     colors={colors}
                   />
 
