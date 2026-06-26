@@ -2,6 +2,7 @@ import { Feather } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Haptics from "expo-haptics";
 import { useSignIn, useSignUp } from "@clerk/expo";
+// useRouter removed — navigation is handled declaratively by (auth)/_layout.tsx
 import React, { useState } from "react";
 import {
   ActivityIndicator,
