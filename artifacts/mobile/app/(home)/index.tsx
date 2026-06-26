@@ -37,7 +37,7 @@ const DEFAULT_SUGGESTIONS = [
 export default function HomeScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { signOut, user } = useAuth();
+  const { signOut } = useAuth();
   const { history, addVideo, clearHistory } = useVideos();
 
   const [topic, setTopic] = useState("");
