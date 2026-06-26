@@ -2,7 +2,7 @@ import { Feather } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Haptics from "expo-haptics";
-import { useAuth } from "@clerk/expo";
+import { useAppAuth } from "@/context/AuthContext";
 import React, { useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -37,7 +37,7 @@ const DEFAULT_SUGGESTIONS = [
 export default function HomeScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { signOut } = useAuth();
+  const { signOut } = useAppAuth();
   const { history, addVideo, clearHistory } = useVideos();
 
   const [topic, setTopic] = useState("");
