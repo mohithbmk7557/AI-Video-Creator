@@ -1,7 +1,6 @@
 import { Feather } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Haptics from "expo-haptics";
-import { useRouter } from "expo-router";
 import { useSignIn, useSignUp } from "@clerk/expo";
 import React, { useState } from "react";
 import {
@@ -41,7 +40,6 @@ function validateSignUp(email: string, password: string): string | null {
 export default function AuthScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const router = useRouter();
 
   const [mode, setMode] = useState<Mode>("signin");
   const [email, setEmail] = useState("");
@@ -98,7 +96,7 @@ export default function AuthScreen() {
       const result = await signIn.create({ identifier: email.trim(), password });
       if (result.status === "complete") {
         await setSignInActive({ session: result.createdSessionId });
-        router.replace("/(home)" as any);
+        // Auth layout detects isSignedIn → true and redirects automatically
       } else {
         setError(`Sign-in incomplete (status: ${result.status}). Please try again.`);
       }
@@ -143,7 +141,7 @@ export default function AuthScreen() {
       const result = await signUp.attemptEmailAddressVerification({ code });
       if (result.status === "complete") {
         await setSignUpActive({ session: result.createdSessionId });
-        router.replace("/(home)" as any);
+        // Auth layout detects isSignedIn → true and redirects automatically
       } else {
         setError(`Verification incomplete (status: ${result.status}). Please try again.`);
       }
@@ -200,7 +198,7 @@ export default function AuthScreen() {
       });
       if (result.status === "complete") {
         await setSignInActive({ session: result.createdSessionId });
-        router.replace("/(home)" as any);
+        // Auth layout detects isSignedIn → true and redirects automatically
       } else {
         setError(`Reset incomplete (status: ${result.status}). Please try again.`);
       }
@@ -425,14 +423,14 @@ export default function AuthScreen() {
                     colors={colors}
                   />
 
-                  {/* Clerk bot-protection anchor — must be in DOM for sign-up */}
-                  {mode === "signup" && (
-                    <View nativeID="clerk-captcha" style={styles.captchaAnchor} />
-                  )}
                 </>
               )}
             </>
           )}
+
+          {/* Clerk bot-protection anchor — always in DOM so Clerk can
+              initialise Turnstile on app load, not only when Sign Up is visible */}
+          <View nativeID="clerk-captcha" style={styles.captchaAnchor} />
         </ScrollView>
       </KeyboardAvoidingView>
     </View>
