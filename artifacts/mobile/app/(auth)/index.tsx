@@ -58,14 +58,23 @@ export default function AuthScreen() {
     setLoading(true); setError(null);
     try {
       if (mode === "signin") {
+        console.log("[SignIn] Attempting sign in for:", email.trim());
+        console.log("[SignIn] Password length:", password.length);
         await signIn(email.trim(), password);
+        console.log("[SignIn] Sign in succeeded for:", email.trim());
       } else {
+        console.log("[SignUp] Attempting sign up for:", email.trim());
+        console.log("[SignUp] Password length:", password.length);
         await signUp(email.trim(), password);
+        console.log("[SignUp] Sign up succeeded for:", email.trim());
       }
       // Auth layout detects isSignedIn → true and navigates to home automatically
     } catch (e: any) {
+      console.log("[Auth] Error during", mode, ":", e?.message);
+      console.log("[Auth] Full error object:", e);
       setError(e?.message ?? "Something went wrong. Please try again.");
     } finally {
+      console.log("[Auth] Finished", mode, "attempt — loading reset");
       setLoading(false);
     }
   };
