@@ -74,7 +74,6 @@ export default function HomeScreen() {
       const data = await res.json() as {
         title: string;
         videoUrl: string;
-        engine: "ltx-2.3" | "slideshow-fallback";
         script: string;
         suggestions: string[];
       };
@@ -83,8 +82,8 @@ export default function HomeScreen() {
         id: Date.now().toString() + Math.random().toString(36).slice(2, 8),
         topic: t,
         title: data.title ?? t,
-        videoUrl: data.videoUrl,
-        engine: data.engine ?? "slideshow-fallback",
+        // Absolute URL so expo-video can stream it on native devices
+        videoUrl: `${baseUrl}${data.videoUrl}`,
         script: data.script ?? "",
         suggestions: data.suggestions ?? [],
         createdAt: Date.now(),
@@ -125,7 +124,7 @@ export default function HomeScreen() {
         </View>
       </View>
 
-      {/* History / Chat list */}
+      {/* History list */}
       {history.length === 0 ? (
         <View style={styles.emptyState}>
           <Feather name="film" size={48} color={colors.mutedForeground} />
@@ -171,7 +170,7 @@ export default function HomeScreen() {
           ))}
         </ScrollView>
 
-        {/* Generating progress indicator */}
+        {/* Generating progress */}
         {generating && (
           <View style={[styles.progressRow, { backgroundColor: colors.primary + "18", borderColor: colors.primary + "33" }]}>
             <ActivityIndicator size="small" color={colors.primary} />
@@ -231,7 +230,6 @@ export default function HomeScreen() {
           <VideoPlayer
             title={activeVideo.title}
             videoUrl={activeVideo.videoUrl}
-            engine={activeVideo.engine}
             onClose={() => setActiveVideo(null)}
           />
         )}
@@ -248,7 +246,6 @@ function VideoHistoryItem({
   onPlay: () => void;
 }) {
   const timeLabel = new Date(video.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  const isLite = video.engine === "slideshow-fallback";
 
   return (
     <View style={styles.historyItem}>
@@ -260,7 +257,7 @@ function VideoHistoryItem({
         <Text style={[styles.timeLabel, { color: colors.mutedForeground }]}>{timeLabel}</Text>
       </View>
 
-      {/* AI response card */}
+      {/* Video card */}
       <Pressable
         onPress={onPlay}
         style={({ pressed }) => [styles.videoCard, { backgroundColor: colors.card, borderColor: colors.border }, pressed && { opacity: 0.92, transform: [{ scale: 0.985 }] }]}
@@ -268,7 +265,7 @@ function VideoHistoryItem({
         {/* Thumbnail */}
         <View style={styles.cardThumb}>
           <LinearGradient
-            colors={isLite ? ["#78350f", "#451a03"] : ["#1e1b4b", "#0f172a"]}
+            colors={["#1e1b4b", "#0f172a"]}
             style={StyleSheet.absoluteFill}
             start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
           />
@@ -286,17 +283,9 @@ function VideoHistoryItem({
             <View style={styles.aiPill}>
               <Text style={styles.aiPillText}>AI Video</Text>
             </View>
-            {isLite && (
-              <View style={styles.litePill}>
-                <Feather name="zap" size={9} color="#f59e0b" />
-                <Text style={styles.litePillText}>Lite</Text>
-              </View>
-            )}
           </View>
           <Text style={[styles.cardTitle, { color: colors.foreground }]} numberOfLines={2}>{video.title}</Text>
-          <Text style={[styles.cardMeta, { color: colors.mutedForeground }]}>
-            {isLite ? "Slideshow · Tap to watch" : "AI generated · Tap to watch"}
-          </Text>
+          <Text style={[styles.cardMeta, { color: colors.mutedForeground }]}>AI generated · Tap to watch</Text>
         </View>
       </Pressable>
     </View>
@@ -356,13 +345,6 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: "#6C63FF44",
   },
   aiPillText: { color: "#6C63FF", fontSize: 10, fontFamily: "Inter_600SemiBold" },
-  litePill: {
-    flexDirection: "row", alignItems: "center", gap: 3,
-    backgroundColor: "#78350f22", borderRadius: 10,
-    paddingHorizontal: 7, paddingVertical: 2,
-    borderWidth: 1, borderColor: "#92400e44",
-  },
-  litePillText: { color: "#f59e0b", fontSize: 10, fontFamily: "Inter_600SemiBold" },
   cardTitle: { fontSize: 13, fontFamily: "Inter_600SemiBold", lineHeight: 19 },
   cardMeta: { fontSize: 11, fontFamily: "Inter_400Regular" },
   bottomArea: { borderTopWidth: 1, paddingHorizontal: 12, paddingTop: 10, gap: 8 },
