@@ -316,9 +316,19 @@ RULES:
       };
     });
 
+    // Normalize slide durations so they sum to exactly 59 seconds.
+    // The backend will re-adjust based on actual TTS duration, but this
+    // gives it a proportional starting point regardless of what the AI returned.
+    const _rawTotal = slides.reduce((a, s) => a + s.duration, 0);
+    const _scale = _rawTotal > 0 ? 59 / _rawTotal : 1;
+    const normalizedSlides = slides.map(s => ({
+      ...s,
+      duration: Math.round(s.duration * _scale * 10) / 10,
+    }));
+
     // Call FastAPI to build the actual .mp4
     req.log?.info({ topic }, "Calling FastAPI /video/build");
-    const { filename, engine } = await callFastApiBuild(topic, slides);
+    const { filename, engine } = await callFastApiBuild(topic, normalizedSlides);
     req.log?.info({ topic, engine, filename }, "Video built successfully");
 
     return res.json({
