@@ -1,4 +1,6 @@
 import { Router } from "express";
+import fs from "fs";
+import path from "path";
 import OpenAI from "openai";
 
 const router = Router();
@@ -7,6 +9,9 @@ const openai = new OpenAI({
   baseURL: process.env["AI_INTEGRATIONS_OPENAI_BASE_URL"],
   apiKey: process.env["AI_INTEGRATIONS_OPENAI_API_KEY"],
 });
+
+const FASTAPI_URL = "http://localhost:8000";
+const VIDEOS_DIR = "/tmp/aivid_videos";
 
 const ACCENT_PALETTE = [
   "#0d2137", "#1a0d3b", "#0a2820", "#2b0f27",
@@ -25,7 +30,6 @@ async function fetchWikiPhotos(topic: string): Promise<Photo[]> {
   const photos: Photo[] = [];
 
   try {
-    // 1. Summary + main image
     const summRes = await fetch(
       `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(topic)}`,
       { headers: { "User-Agent": UA } }
@@ -42,7 +46,6 @@ async function fetchWikiPhotos(topic: string): Promise<Photo[]> {
       if (src && isPhoto(src)) photos.push({ url: ensureHttps(src), caption: pageTitle });
     }
 
-    // 2. Article gallery (srcset-based)
     const mediaRes = await fetch(
       `https://en.wikipedia.org/api/rest_v1/page/media-list/${encodeURIComponent(pageTitle)}`,
       { headers: { "User-Agent": UA } }
@@ -73,7 +76,6 @@ async function fetchWikiPhotos(topic: string): Promise<Photo[]> {
       }
     }
 
-    // 3. Wikimedia Commons search for the topic
     const commRes = await fetch(
       `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(topic)}&gsrnamespace=6&prop=imageinfo&iiprop=url|mime&format=json&gsrlimit=12&origin=*`,
       { headers: { "User-Agent": UA } }
@@ -99,7 +101,7 @@ async function fetchWikiPhotos(topic: string): Promise<Photo[]> {
   return photos;
 }
 
-// ─── OpenVerse (CC-licensed images from Flickr, Europeana, Wikimedia, etc.) ──
+// ─── OpenVerse (CC-licensed images) ──────────────────────────────────────────
 async function fetchOpenVersePhotos(query: string): Promise<Photo[]> {
   try {
     const res = await fetch(
@@ -118,7 +120,7 @@ async function fetchOpenVersePhotos(query: string): Promise<Photo[]> {
   }
 }
 
-// ─── Unsplash Source (topic-specific free photos, no key needed) ──────────────
+// ─── Unsplash Source fallback ─────────────────────────────────────────────────
 function unsplashUrl(query: string, seed: number): string {
   return `https://source.unsplash.com/900x600/?${encodeURIComponent(query)}&sig=${seed}`;
 }
@@ -133,15 +135,56 @@ function isPhoto(url: string): boolean {
 function ensureHttps(url: string) { return url.startsWith("//") ? "https:" + url : url; }
 function stripHtml(html: string) { return html.replace(/<[^>]+>/g, "").trim(); }
 
-// ─── Route ────────────────────────────────────────────────────────────────────
+// ─── Call FastAPI /video/build ────────────────────────────────────────────────
+async function callFastApiBuild(
+  topic: string,
+  slides: Array<{ narration: string; image_urls: string[]; duration: number; heading: string }>
+): Promise<{ filename: string; engine: string }> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 180_000); // 3 min timeout
+  try {
+    const res = await fetch(`${FASTAPI_URL}/video/build`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ topic, slides }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`FastAPI /video/build returned ${res.status}: ${body.slice(0, 200)}`);
+    }
+    return await res.json() as { filename: string; engine: string };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+// ─── GET /api/video/files/:filename — serve generated .mp4 files ──────────────
+router.get("/files/:filename", (req, res) => {
+  const { filename } = req.params;
+  if (!/^[a-f0-9]+\.mp4$/.test(filename)) {
+    res.status(400).json({ error: "invalid filename" });
+    return;
+  }
+  const filePath = path.join(VIDEOS_DIR, filename);
+  if (!fs.existsSync(filePath)) {
+    res.status(404).json({ error: "video not found" });
+    return;
+  }
+  res.setHeader("Content-Type", "video/mp4");
+  res.setHeader("Accept-Ranges", "bytes");
+  res.sendFile(filePath);
+});
+
+// ─── POST /api/video/generate ─────────────────────────────────────────────────
 router.post("/generate", async (req, res) => {
   try {
     const { topic } = req.body as { topic: string };
     if (!topic || typeof topic !== "string")
       return res.status(400).json({ error: "topic is required" });
 
-    // Fire AI + image sources simultaneously
-    const [wikiPhotos, overversePhotos, aiResult] = await Promise.all([
+    // Fire AI + image fetching simultaneously
+    const [wikiPhotos, openversePhotos, aiResult] = await Promise.all([
       fetchWikiPhotos(topic),
       fetchOpenVersePhotos(topic),
       openai.chat.completions.create({
@@ -166,16 +209,12 @@ Return ONLY valid JSON (no markdown):
       "id": "slide-1",
       "duration": 10,
       "heading": "Scene title — short, punchy (4-6 words)",
-      "keyPhrase": "THE most striking 3-4 word phrase from this scene (shown LARGE on screen)",
-      "fact": "One specific, fascinating fact with real numbers/dates (20-30 words)",
       "narration": "What the narrator says, natural spoken English, documentary tone (25-35 words)",
       "imageQueries": [
         "establishing shot query — wide scenic view (5-7 words)",
         "detail/close-up query — specific element of this scene (5-7 words)",
         "dramatic/climactic query — most visually striking aspect (5-7 words)"
-      ],
-      "stat": "The single most impressive number/fact in short form e.g. '2,300 miles' or '776 BC' or '1.4 billion'",
-      "statLabel": "what the stat means in 3-5 words e.g. 'of wall constructed' or 'first Olympic Games'"
+      ]
     }
   ],
   "script": "Complete 59-second narration, all scenes connected",
@@ -183,11 +222,9 @@ Return ONLY valid JSON (no markdown):
 }
 
 RULES:
-- keyPhrase must be 3-4 WORDS ONLY — these appear HUGE on screen
-- stat must be SHORT (under 15 chars) — appears as big graphic callout
-- imageQueries[0] = wide establishing shot, [1] = close detail, [2] = dramatic/different angle
-- Make facts specific: use real numbers, dates, names
-- Narration = conversational, not academic`,
+- imageQueries[0] = wide establishing shot, [1] = close detail, [2] = dramatic angle
+- Make narration conversational, not academic — 25-35 words per scene
+- Total video = 59 seconds`,
           },
         ],
       }),
@@ -198,9 +235,8 @@ RULES:
     let parsed: {
       title: string;
       slides: Array<{
-        id: string; duration: number; heading: string; keyPhrase: string;
-        fact: string; narration: string; imageQueries: string[];
-        stat: string; statLabel: string;
+        id: string; duration: number; heading: string;
+        narration: string; imageQueries: string[];
       }>;
       script: string;
       suggestions: string[];
@@ -214,50 +250,42 @@ RULES:
     }
     if (!Array.isArray(parsed.slides)) throw new Error("Invalid AI response");
 
-    // Merge all real photos into one pool (Wikipedia + OpenVerse)
+    // Build image pool
     const photoPool: Photo[] = [...wikiPhotos];
-    for (const p of overversePhotos) {
+    for (const p of openversePhotos) {
       if (!photoPool.find(x => x.url === p.url)) photoPool.push(p);
     }
 
-    // Assign 3 images per slide
+    // Build slides with 3 images each for FastAPI
     const slides = parsed.slides.slice(0, 6).map((s, slideIdx) => {
       const queries = Array.isArray(s.imageQueries) ? s.imageQueries : [topic, topic, topic];
-
-      // Pick 3 different photos for this slide
-      const imgUrls: string[] = [];
+      const imageUrls: string[] = [];
       for (let shot = 0; shot < 3; shot++) {
         const poolIdx = slideIdx * 3 + shot;
         const photo = photoPool[poolIdx % Math.max(photoPool.length, 1)];
-        if (photo && photo.url !== imgUrls[0] && photo.url !== imgUrls[1]) {
-          imgUrls.push(photo.url);
+        if (photo && !imageUrls.includes(photo.url)) {
+          imageUrls.push(photo.url);
         } else {
-          // Fallback: Unsplash with the specific imageQuery for this shot
-          imgUrls.push(unsplashUrl(queries[shot] ?? topic, slideIdx * 10 + shot));
+          imageUrls.push(unsplashUrl(queries[shot] ?? topic, slideIdx * 10 + shot));
         }
       }
-
-      const firstCaption = photoPool[slideIdx * 3 % Math.max(photoPool.length, 1)]?.caption ?? "";
-
       return {
-        id: s.id ?? `slide-${slideIdx + 1}`,
-        duration: s.duration ?? 10,
         heading: s.heading ?? "",
-        keyPhrase: s.keyPhrase ?? s.heading?.split(" ").slice(0, 4).join(" ") ?? "",
-        fact: s.fact ?? "",
         narration: s.narration ?? "",
-        imageQueries: queries,
-        imageUrls: imgUrls,
-        imageCaption: firstCaption,
-        stat: s.stat ?? "",
-        statLabel: s.statLabel ?? "",
-        accent: ACCENT_PALETTE[slideIdx % ACCENT_PALETTE.length],
+        duration: s.duration ?? 10,
+        image_urls: imageUrls,
       };
     });
 
+    // Call FastAPI to build the actual .mp4
+    req.log?.info({ topic }, "Calling FastAPI /video/build");
+    const { filename, engine } = await callFastApiBuild(topic, slides);
+    req.log?.info({ topic, engine, filename }, "Video built successfully");
+
     return res.json({
       title: parsed.title ?? topic,
-      slides,
+      videoUrl: `/api/video/files/${filename}`,
+      engine,
       script: parsed.script ?? "",
       suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions.slice(0, 4) : [],
     });
