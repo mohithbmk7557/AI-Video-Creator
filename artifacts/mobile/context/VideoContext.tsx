@@ -13,7 +13,6 @@ export interface VideoItem {
   topic: string;
   title: string;
   videoUrl: string;
-  engine: "ltx-2.3" | "slideshow-fallback";
   script: string;
   suggestions: string[];
   createdAt: number;
@@ -31,7 +30,7 @@ const VideoContext = createContext<VideoContextValue>({
   clearHistory: async () => {},
 });
 
-const STORAGE_KEY = "@aivid_history_v5";
+const STORAGE_KEY = "@aivid_history_v6";
 
 export function VideoProvider({ children }: { children: ReactNode }) {
   const [history, setHistory] = useState<VideoItem[]>([]);
