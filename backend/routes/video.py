@@ -49,22 +49,42 @@ class BuildResponse(BaseModel):
 @router.post("/build", response_model=BuildResponse)
 async def build_video_file(body: BuildRequest):
     """
-    Receives slides with image_urls from Express, builds an MP4 using the
-    FFmpeg slideshow engine (video_builder.py + audio.py from the uploaded ZIP).
+    Receives slides with image_urls from Express, builds an MP4.
+
+    Engine priority:
+      1. Pexels video engine  — if PEXELS_API_KEY is set (real video footage)
+      2. Slideshow engine     — Ken Burns pan/zoom on topic-relevant photos (always available)
     """
     if not body.slides:
         raise HTTPException(status_code=400, detail="slides required")
 
     os.makedirs(VIDEOS_DIR, exist_ok=True)
     slides = [s.model_dump() for s in body.slides]
+    pexels_key = os.environ.get("PEXELS_API_KEY", "").strip()
 
-    try:
-        from video_engines.slideshow_engine.wrapper import generate_slideshow_video
-        filepath, engine = generate_slideshow_video(slides, VIDEOS_DIR)
-        log.info("Video built — engine=%s topic=%s file=%s", engine, body.topic, filepath)
-    except Exception as exc:
-        log.error("Video generation failed for topic '%s': %s", body.topic, exc)
-        raise HTTPException(status_code=500, detail=f"Video generation failed: {exc}")
+    filepath: str | None = None
+    engine: str = "unknown"
+
+    # ── 1. Try Pexels if we have a key ────────────────────────────────────────
+    if pexels_key:
+        try:
+            from video_engines.pexels_engine.wrapper import generate_pexels_video
+            filepath, engine = generate_pexels_video(slides, VIDEOS_DIR, pexels_key)
+            log.info("Pexels engine success — topic=%s file=%s", body.topic, filepath)
+        except Exception as pex_exc:
+            log.warning("Pexels engine failed (%s) — falling back to slideshow", pex_exc)
+            filepath = None
+
+    # ── 2. Slideshow engine (Ken Burns animated) — always-available fallback ──
+    if not filepath:
+        try:
+            from video_engines.slideshow_engine.wrapper import generate_slideshow_video
+            filepath, engine = generate_slideshow_video(slides, VIDEOS_DIR)
+            log.info("Slideshow engine success — engine=%s topic=%s file=%s",
+                     engine, body.topic, filepath)
+        except Exception as exc:
+            log.error("Video generation failed for topic '%s': %s", body.topic, exc)
+            raise HTTPException(status_code=500, detail=f"Video generation failed: {exc}")
 
     return BuildResponse(filename=os.path.basename(filepath), engine=engine)
 
