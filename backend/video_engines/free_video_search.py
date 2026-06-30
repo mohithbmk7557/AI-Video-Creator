@@ -5,6 +5,9 @@ Find freely available video clips — zero API key required.
 Sources (tried in order):
   1. Wikimedia Commons  — curated encyclopedia videos (Tower Bridge, waterfalls, etc.)
   2. Internet Archive   — historical footage, newsreels, public-domain films
+
+Timeouts are kept tight so the caller gets a fast failure and can fall back
+to the Ken Burns photo engine instead of hanging.
 """
 
 import logging
@@ -19,8 +22,8 @@ ARCHIVE_SEARCH = "https://archive.org/advancedsearch.php"
 
 _HEADERS = {"User-Agent": "AiVid/1.0 (educational video generator)"}
 
-_MAX_FILE_MB = 40          # skip files larger than this
-_TIMEOUT = 10              # API call timeout (s)
+_MAX_FILE_MB = 40      # skip files larger than this
+_TIMEOUT     = 4       # per-request timeout (s) — tight to fail fast
 
 
 # ── Wikimedia Commons ────────────────────────────────────────────────────────
@@ -28,18 +31,17 @@ _TIMEOUT = 10              # API call timeout (s)
 def _wikimedia_video(query: str) -> Optional[str]:
     """Search Wikimedia Commons for a short video clip matching query."""
     try:
-        # Search File: namespace for video files
         r = httpx.get(
             WIKIMEDIA_API,
             params={
                 "action": "query",
-                "list": "search",
-                "srsearch": query,
+                "list":   "search",
+                "srsearch":   query,
                 "srnamespace": "6",
-                "srlimit": "15",
-                "srwhat": "text",
-                "format": "json",
-                "origin": "*",
+                "srlimit":     "8",       # fewer results → faster
+                "srwhat":      "text",
+                "format":      "json",
+                "origin":      "*",
             },
             headers=_HEADERS,
             timeout=_TIMEOUT,
@@ -50,7 +52,6 @@ def _wikimedia_video(query: str) -> Optional[str]:
         log.debug("Wikimedia search error: %s", exc)
         return None
 
-    # Keep only video file types
     video_titles = [
         res["title"]
         for res in results
@@ -60,15 +61,15 @@ def _wikimedia_video(query: str) -> Optional[str]:
     if not video_titles:
         return None
 
-    # Fetch actual URLs + sizes for the first few candidates
-    titles_param = "|".join(video_titles[:5])
+    # Resolve direct URLs for first 3 candidates only
+    titles_param = "|".join(video_titles[:3])
     try:
         r2 = httpx.get(
             WIKIMEDIA_API,
             params={
                 "action": "query",
                 "titles": titles_param,
-                "prop": "imageinfo",
+                "prop":   "imageinfo",
                 "iiprop": "url|size",
                 "format": "json",
                 "origin": "*",
@@ -86,14 +87,13 @@ def _wikimedia_video(query: str) -> Optional[str]:
     for page in pages.values():
         for info in page.get("imageinfo", []):
             size = info.get("size", 0)
-            url = info.get("url", "")
+            url  = info.get("url", "")
             if url and size < _MAX_FILE_MB * 1024 * 1024:
                 candidates.append((size, url))
 
     if not candidates:
         return None
 
-    # Return the smallest qualifying clip (faster download)
     candidates.sort()
     return candidates[0][1]
 
@@ -106,9 +106,9 @@ def _archive_video(query: str) -> Optional[str]:
         r = httpx.get(
             ARCHIVE_SEARCH,
             params={
-                "q": f"({query}) AND mediatype:movies",
+                "q":    f"({query}) AND mediatype:movies",
                 "fl[]": ["identifier"],
-                "rows": "8",
+                "rows": "3",        # only 3 results — fewer metadata round-trips
                 "page": "1",
                 "output": "json",
             },
@@ -121,7 +121,8 @@ def _archive_video(query: str) -> Optional[str]:
         log.debug("Archive.org search error: %s", exc)
         return None
 
-    for doc in docs:
+    # Only check the top 2 identifiers to limit total latency
+    for doc in docs[:2]:
         identifier = doc.get("identifier", "")
         if not identifier:
             continue
@@ -135,11 +136,10 @@ def _archive_video(query: str) -> Optional[str]:
             continue
 
         files = meta.get("files", [])
-        # Prefer small MP4 files first, then WebM
         candidates = []
         for f in files:
             name = f.get("name", "")
-            ext = name.lower().rsplit(".", 1)[-1] if "." in name else ""
+            ext  = name.lower().rsplit(".", 1)[-1] if "." in name else ""
             size = float(f.get("size", 999_999_999))
             if ext in ("mp4", "webm", "ogv") and size < _MAX_FILE_MB * 1024 * 1024:
                 priority = 0 if ext == "mp4" else 1
@@ -158,10 +158,9 @@ def _archive_video(query: str) -> Optional[str]:
 def find_free_video_url(query: str) -> Optional[str]:
     """
     Return a direct URL to a free, downloadable video clip for the query.
-    Tries Wikimedia Commons first (fast CDN, curated content), then Archive.org.
-    Returns None if no clip is found.
+    Tries Wikimedia Commons first (fast CDN), then Archive.org.
+    Returns None quickly if nothing is found so callers can fall back to Ken Burns.
     """
-    # Try multiple query variations to improve hit rate
     words = [w for w in query.split() if len(w) > 3]
     queries = list(dict.fromkeys([
         query,
@@ -169,13 +168,13 @@ def find_free_video_url(query: str) -> Optional[str]:
         words[0] if words else query,
     ]))
 
-    for q in queries:
+    for q in queries[:2]:          # limit to 2 Wikimedia attempts
         url = _wikimedia_video(q)
         if url:
             log.info("Free video found on Wikimedia for '%s'", q)
             return url
 
-    for q in queries[:2]:        # Archive.org is slower — limit attempts
+    for q in queries[:1]:          # only 1 Archive.org attempt
         url = _archive_video(q)
         if url:
             log.info("Free video found on Archive.org for '%s'", q)

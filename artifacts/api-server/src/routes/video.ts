@@ -147,7 +147,7 @@ async function callFastApiBuild(
   slides: Array<{ narration: string; image_urls: string[]; duration: number; heading: string }>
 ): Promise<{ filename: string; engine: string }> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 180_000); // 3 min timeout
+  const timeout = setTimeout(() => controller.abort(), 270_000); // 4.5 min timeout
   try {
     const res = await fetch(`${FASTAPI_URL}/video/build`, {
       method: "POST",

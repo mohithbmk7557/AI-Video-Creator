@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -241,7 +242,22 @@ def _trim_and_overlay(raw: Path, dest: Path, duration: float, heading: str) -> b
 def _try_free_video_clip(heading: str, duration: float, dest: Path) -> bool:
     if _find_video is None or not heading:
         return False
-    url = _find_video(heading)
+
+    # Hard cap: give the entire search 14 s max so we can always fall back to
+    # Ken Burns before the 3-minute Express→FastAPI timeout fires.
+    _url: list = [None]
+
+    def _search() -> None:
+        try:
+            _url[0] = _find_video(heading)
+        except Exception:
+            pass
+
+    t = threading.Thread(target=_search, daemon=True)
+    t.start()
+    t.join(timeout=14)
+
+    url = _url[0]
     if not url:
         return False
     raw = dest.parent / f"raw_{dest.stem}.tmp"
