@@ -25,10 +25,16 @@ log = logging.getLogger(__name__)
 _ENGINE_DIR = os.path.abspath(os.path.dirname(__file__))
 
 
+_HEADERS = {
+    "User-Agent": "AiVid/1.0 (educational video generator; https://replit.com)",
+    "Accept": "image/jpeg,image/png,image/webp,image/*",
+}
+
+
 def _fetch_image(url: str) -> Image.Image | None:
     """Download an image from a URL and return as a PIL Image, or None on failure."""
     try:
-        r = httpx.get(url, timeout=12, follow_redirects=True)
+        r = httpx.get(url, timeout=15, follow_redirects=True, headers=_HEADERS)
         r.raise_for_status()
         img = Image.open(io.BytesIO(r.content))
         img.load()
