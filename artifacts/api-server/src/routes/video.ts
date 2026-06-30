@@ -120,9 +120,15 @@ async function fetchOpenVersePhotos(query: string): Promise<Photo[]> {
   }
 }
 
-// ─── Unsplash Source fallback ─────────────────────────────────────────────────
-function unsplashUrl(query: string, seed: number): string {
-  return `https://source.unsplash.com/900x600/?${encodeURIComponent(query)}&sig=${seed}`;
+// ─── Fallback image sources (Unsplash Source is dead since 2023) ─────────────
+function loremflickrUrl(query: string, seed: number): string {
+  // Topic-relevant image from Flickr (free, no key, reliable)
+  const keyword = query.split(" ").slice(0, 2).join(",");
+  return `https://loremflickr.com/1280/720/${encodeURIComponent(keyword)}?random=${seed}`;
+}
+function picsumUrl(seed: number): string {
+  // Always-reliable beautiful photograph (not topic-specific but never blank)
+  return `https://picsum.photos/seed/${seed}/1280/720`;
 }
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
@@ -280,19 +286,28 @@ RULES:
       if (!photoPool.find(x => x.url === p.url)) photoPool.push(p);
     }
 
-    // Build slides with 3 images each for FastAPI
+    // Build slides — give each slide up to 5 URL candidates so the wrapper
+    // can fall through to a working one even if the first few 404.
     const slides = parsed.slides.slice(0, 6).map((s, slideIdx) => {
       const queries = Array.isArray(s.imageQueries) ? s.imageQueries : [topic, topic, topic];
       const imageUrls: string[] = [];
+
+      // 1. Pull from the Wikipedia / OpenVerse pool first
       for (let shot = 0; shot < 3; shot++) {
         const poolIdx = slideIdx * 3 + shot;
-        const photo = photoPool[poolIdx % Math.max(photoPool.length, 1)];
-        if (photo && !imageUrls.includes(photo.url)) {
-          imageUrls.push(photo.url);
-        } else {
-          imageUrls.push(unsplashUrl(queries[shot] ?? topic, slideIdx * 10 + shot));
+        if (poolIdx < photoPool.length) {
+          const url = photoPool[poolIdx].url;
+          if (!imageUrls.includes(url)) imageUrls.push(url);
         }
       }
+
+      // 2. loremflickr — topic-relevant, free, reliable
+      imageUrls.push(loremflickrUrl(queries[0] ?? topic, slideIdx * 7 + 1));
+      imageUrls.push(loremflickrUrl(topic, slideIdx * 7 + 2));
+
+      // 3. picsum — always-works beautiful photo (ultimate fallback)
+      imageUrls.push(picsumUrl(slideIdx * 100 + 42));
+
       return {
         heading: s.heading ?? "",
         narration: s.narration ?? "",
