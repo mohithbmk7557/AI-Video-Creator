@@ -8,5 +8,12 @@ python-dotenv==1.0.1
 pydantic==2.10.3
 pydantic-settings==2.7.0
 
+# Slideshow video engine (zero-cost fallback)
+Pillow>=10.0
+espeakng-loader>=0.2
+
+# LTX-2.3 via Fal.ai (primary engine — requires LTX_API_KEY)
+fal-client>=0.10.0
+
 # Optional – install to enable Supabase persistence
 # pip install supabase==2.10.0

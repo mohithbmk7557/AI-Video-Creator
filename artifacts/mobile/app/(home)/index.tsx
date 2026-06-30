@@ -1,5 +1,4 @@
 import { Feather } from "@expo/vector-icons";
-import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Haptics from "expo-haptics";
 import { useAppAuth } from "@/context/AuthContext";
@@ -20,10 +19,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useColors } from "@/hooks/useColors";
 import { useVideos, type VideoItem } from "@/context/VideoContext";
-import { SlidePlayer } from "@/components/SlidePlayer";
-
-const CARD_THUMB_W = 110;
-const CARD_THUMB_H = 80;
+import { VideoPlayer } from "@/components/VideoPlayer";
 
 const DEFAULT_SUGGESTIONS = [
   "London landmarks",
@@ -49,7 +45,6 @@ export default function HomeScreen() {
   const topPad = Platform.OS === "web" ? 56 : insets.top;
   const bottomPad = Platform.OS === "web" ? 20 : insets.bottom;
 
-  // Collect unique suggestions from history or use defaults
   const suggestions = history.length > 0
     ? [...new Set(history.flatMap((v) => v.suggestions))].slice(0, 8)
     : DEFAULT_SUGGESTIONS;
@@ -78,7 +73,8 @@ export default function HomeScreen() {
 
       const data = await res.json() as {
         title: string;
-        slides: VideoItem["slides"];
+        videoUrl: string;
+        engine: "ltx-2.3" | "slideshow-fallback";
         script: string;
         suggestions: string[];
       };
@@ -87,7 +83,8 @@ export default function HomeScreen() {
         id: Date.now().toString() + Math.random().toString(36).slice(2, 8),
         topic: t,
         title: data.title ?? t,
-        slides: data.slides ?? [],
+        videoUrl: data.videoUrl,
+        engine: data.engine ?? "slideshow-fallback",
         script: data.script ?? "",
         suggestions: data.suggestions ?? [],
         createdAt: Date.now(),
@@ -97,7 +94,6 @@ export default function HomeScreen() {
       setTopic("");
       setActiveVideo(video);
 
-      // Scroll to bottom after add
       setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 300);
     } catch (e: any) {
       setError(e.message ?? "Something went wrong");
@@ -175,6 +171,17 @@ export default function HomeScreen() {
           ))}
         </ScrollView>
 
+        {/* Generating progress indicator */}
+        {generating && (
+          <View style={[styles.progressRow, { backgroundColor: colors.primary + "18", borderColor: colors.primary + "33" }]}>
+            <ActivityIndicator size="small" color={colors.primary} />
+            <View style={styles.progressText}>
+              <Text style={[styles.progressLabel, { color: colors.foreground }]}>Building your video…</Text>
+              <Text style={[styles.progressSub, { color: colors.mutedForeground }]}>Generating script, images & audio — this takes ~60s</Text>
+            </View>
+          </View>
+        )}
+
         {/* Error */}
         {error && (
           <View style={[styles.errorRow, { backgroundColor: colors.destructive + "22" }]}>
@@ -213,7 +220,7 @@ export default function HomeScreen() {
         </View>
       </View>
 
-      {/* Fullscreen player modal */}
+      {/* Fullscreen video player modal */}
       <Modal
         visible={activeVideo !== null}
         animationType="slide"
@@ -221,10 +228,10 @@ export default function HomeScreen() {
         onRequestClose={() => setActiveVideo(null)}
       >
         {activeVideo && (
-          <SlidePlayer
+          <VideoPlayer
             title={activeVideo.title}
-            slides={activeVideo.slides}
-            script={activeVideo.script}
+            videoUrl={activeVideo.videoUrl}
+            engine={activeVideo.engine}
             onClose={() => setActiveVideo(null)}
           />
         )}
@@ -241,7 +248,7 @@ function VideoHistoryItem({
   onPlay: () => void;
 }) {
   const timeLabel = new Date(video.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  const totalDuration = video.slides.reduce((s, sl) => s + sl.duration, 0);
+  const isLite = video.engine === "slideshow-fallback";
 
   return (
     <View style={styles.historyItem}>
@@ -260,24 +267,16 @@ function VideoHistoryItem({
       >
         {/* Thumbnail */}
         <View style={styles.cardThumb}>
-          {(video.slides[0]?.imageUrls?.[0] ?? video.slides[0]?.imageUrl) ? (
-            <Image
-              source={{ uri: video.slides[0]?.imageUrls?.[0] ?? (video.slides[0] as any)?.imageUrl }}
-              style={StyleSheet.absoluteFill}
-              contentFit="cover"
-            />
-          ) : null}
           <LinearGradient
-            colors={["#00000033", "#00000088"]}
+            colors={isLite ? ["#78350f", "#451a03"] : ["#1e1b4b", "#0f172a"]}
             style={StyleSheet.absoluteFill}
+            start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
           />
-          {/* Play overlay */}
           <LinearGradient colors={["#6C63FF", "#7C3AED"]} style={styles.thumbPlayBtn} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}>
             <Feather name="play" size={14} color="#fff" style={{ marginLeft: 2 }} />
           </LinearGradient>
-          {/* Duration badge */}
           <View style={styles.durationBadge}>
-            <Text style={styles.durationBadgeText}>{totalDuration}s</Text>
+            <Text style={styles.durationBadgeText}>59s</Text>
           </View>
         </View>
 
@@ -287,10 +286,16 @@ function VideoHistoryItem({
             <View style={styles.aiPill}>
               <Text style={styles.aiPillText}>AI Video</Text>
             </View>
+            {isLite && (
+              <View style={styles.litePill}>
+                <Feather name="zap" size={9} color="#f59e0b" />
+                <Text style={styles.litePillText}>Lite</Text>
+              </View>
+            )}
           </View>
           <Text style={[styles.cardTitle, { color: colors.foreground }]} numberOfLines={2}>{video.title}</Text>
           <Text style={[styles.cardMeta, { color: colors.mutedForeground }]}>
-            {video.slides.length} scenes · Tap to watch
+            {isLite ? "Slideshow · Tap to watch" : "AI generated · Tap to watch"}
           </Text>
         </View>
       </Pressable>
@@ -329,7 +334,7 @@ const styles = StyleSheet.create({
     flexDirection: "row", alignItems: "stretch",
   },
   cardThumb: {
-    width: CARD_THUMB_W, height: CARD_THUMB_H,
+    width: 110, height: 80,
     backgroundColor: "#1a1a2e", overflow: "hidden",
     alignItems: "center", justifyContent: "center",
   },
@@ -344,13 +349,20 @@ const styles = StyleSheet.create({
   },
   durationBadgeText: { color: "#fff", fontSize: 10, fontFamily: "Inter_700Bold" },
   cardBody: { flex: 1, paddingHorizontal: 12, paddingVertical: 10, gap: 4, justifyContent: "center" },
-  cardTitleRow: { flexDirection: "row", alignItems: "center" },
+  cardTitleRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   aiPill: {
     backgroundColor: "#6C63FF22", borderRadius: 10,
     paddingHorizontal: 8, paddingVertical: 2,
     borderWidth: 1, borderColor: "#6C63FF44",
   },
   aiPillText: { color: "#6C63FF", fontSize: 10, fontFamily: "Inter_600SemiBold" },
+  litePill: {
+    flexDirection: "row", alignItems: "center", gap: 3,
+    backgroundColor: "#78350f22", borderRadius: 10,
+    paddingHorizontal: 7, paddingVertical: 2,
+    borderWidth: 1, borderColor: "#92400e44",
+  },
+  litePillText: { color: "#f59e0b", fontSize: 10, fontFamily: "Inter_600SemiBold" },
   cardTitle: { fontSize: 13, fontFamily: "Inter_600SemiBold", lineHeight: 19 },
   cardMeta: { fontSize: 11, fontFamily: "Inter_400Regular" },
   bottomArea: { borderTopWidth: 1, paddingHorizontal: 12, paddingTop: 10, gap: 8 },
@@ -361,6 +373,13 @@ const styles = StyleSheet.create({
     borderRadius: 20, borderWidth: 1, height: 34, justifyContent: "center",
   },
   suggestionText: { fontSize: 13, fontFamily: "Inter_500Medium" },
+  progressRow: {
+    flexDirection: "row", alignItems: "center", gap: 10,
+    padding: 10, borderRadius: 12, borderWidth: 1,
+  },
+  progressText: { flex: 1 },
+  progressLabel: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
+  progressSub: { fontSize: 11, fontFamily: "Inter_400Regular", marginTop: 2 },
   errorRow: { flexDirection: "row", alignItems: "center", gap: 6, padding: 8, borderRadius: 8 },
   errorText: { fontSize: 12, fontFamily: "Inter_400Regular", flex: 1 },
   inputBar: {

@@ -8,26 +8,12 @@ import React, {
   type ReactNode,
 } from "react";
 
-export interface Slide {
-  id: string;
-  duration: number;
-  heading: string;
-  keyPhrase: string;       // 3–5 bold words for large center reveal
-  fact: string;            // full educational fact
-  narration: string;       // spoken narration text
-  imageQueries: string[];  // [shot1 query, shot2 query, shot3 query]
-  imageUrls: string[];     // [shot1 url, shot2 url, shot3 url]
-  imageCaption: string;
-  stat: string;            // e.g. "2,300 miles"
-  statLabel: string;       // e.g. "of wall constructed"
-  accent: string;
-}
-
 export interface VideoItem {
   id: string;
   topic: string;
   title: string;
-  slides: Slide[];
+  videoUrl: string;
+  engine: "ltx-2.3" | "slideshow-fallback";
   script: string;
   suggestions: string[];
   createdAt: number;
@@ -45,7 +31,7 @@ const VideoContext = createContext<VideoContextValue>({
   clearHistory: async () => {},
 });
 
-const STORAGE_KEY = "@aivid_history_v4";
+const STORAGE_KEY = "@aivid_history_v5";
 
 export function VideoProvider({ children }: { children: ReactNode }) {
   const [history, setHistory] = useState<VideoItem[]>([]);

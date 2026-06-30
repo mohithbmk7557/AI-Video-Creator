@@ -1,0 +1,53 @@
+I'm uploading an existing video generation API (files: main.py, video_builder.py, 
+audio.py, tts.py, requirements.txt) that creates slideshow videos from images + 
+text overlays + offline espeak-ng narration using FFmpeg. This is a working, 
+zero-cost, no-API-key fallback generator.
+
+Do the following:
+
+================================================
+STEP 1 — KEEP THIS AS A FALLBACK "LITE MODE"
+================================================
+- Move these uploaded files into a new backend module: /backend/video_engines/slideshow_engine/
+- Wrap its functionality (build_video, add_narration) into a callable function: 
+  generate_slideshow_video(script: str, image_urls: list[str]) -> video_file_path
+- Do NOT delete or modify the internal logic of video_builder.py, audio.py, or tts.py — keep them as-is
+- This engine will be used only when LTX-2.3 generation fails or when a user is on a free/no-API-credit tier
+
+================================================
+STEP 2 — ADD LTX-2.3 AS THE PRIMARY VIDEO ENGINE
+================================================
+- Create a new module: /backend/video_engines/ltx_engine/
+- Integrate LTX-2.3 via a hosted inference API (Fal.ai), authenticated with environment 
+  variable LTX_API_KEY
+- Implement generate_ltx_video(script: str) -> video_file_path that:
+  1. Splits the script into clip-sized segments (5-10 seconds each, matching LTX-2.3's native output length)
+  2. Calls the LTX-2.3 API per segment, passing script text so audio and video generate together with built-in sync
+  3. Polls each clip job until complete
+  4. Uses FFmpeg only to concatenate the already-synced clips into one continuous video
+
+================================================
+STEP 3 — ROUTING LOGIC IN /video/generate ENDPOINT
+================================================
+- Update the /video/generate endpoint to:
+  1. Try generate_ltx_video(script) first
+  2. If the LTX_API_KEY is missing, invalid, or the API call fails/times out, automatically 
+     fall back to generate_slideshow_video(script, images) using the uploaded slideshow engine
+  3. Return the video URL along with a field indicating which engine was used: 
+     "engine": "ltx-2.3" or "engine": "slideshow-fallback"
+  4. Log fallback usage so I can monitor how often the fallback triggers
+
+================================================
+STEP 4 — FRONTEND INDICATOR
+================================================
+- On the video result screen, show a small badge if the fallback engine was used, 
+  e.g. "Generated in Lite Mode" so users understand why a video looks like a 
+  slideshow instead of full motion video
+- No badge needed when LTX-2.3 generates the video (this is the expected default experience)
+
+Update requirements.txt to include both the existing slideshow dependencies 
+(fastapi, Pillow, espeakng-loader) and any new LTX-2.3/Fal.ai client dependencies.
+
+Test by generating a video for "Photosynthesis" with a valid LTX_API_KEY (should 
+produce real motion video), then again with no LTX_API_KEY set (should automatically 
+fall back to the slideshow engine and succeed without crashing).

@@ -1,11 +1,20 @@
+import logging
+import os
 import uuid
 from datetime import datetime, timezone
+from typing import List
+
 from fastapi import APIRouter, Depends, HTTPException
-from models import VideoGenerateRequest, VideoGenerateResponse, VideoHistoryResponse, VideoItem
+from pydantic import BaseModel
+
 from auth_utils import get_current_user
 from database import get_supabase, get_mock_videos
+from models import VideoGenerateRequest, VideoGenerateResponse, VideoHistoryResponse, VideoItem
 
+log = logging.getLogger(__name__)
 router = APIRouter()
+
+VIDEOS_DIR = "/tmp/aivid_videos"
 
 MOCK_VIDEO_URLS = [
     "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
@@ -20,11 +29,78 @@ MOCK_THUMBNAILS = [
 ]
 
 
+# ── Internal build models ─────────────────────────────────────────────────────
+
+class SlideInput(BaseModel):
+    narration: str = ""
+    image_urls: List[str] = []
+    duration: float = 10.0
+    heading: str = ""
+
+
+class BuildRequest(BaseModel):
+    topic: str = ""
+    slides: List[SlideInput]
+
+
+class BuildResponse(BaseModel):
+    filename: str
+    engine: str
+
+
+# ── POST /video/build  (internal — called by Express API server) ───────────────
+
+@router.post("/build", response_model=BuildResponse)
+async def build_video_file(body: BuildRequest):
+    """
+    Internal endpoint: Express calls this with parsed slides.
+    Tries LTX-2.3 first (if LTX_API_KEY set), falls back to slideshow engine.
+    Writes the .mp4 to VIDEOS_DIR and returns the filename + engine name.
+    """
+    if not body.slides:
+        raise HTTPException(status_code=400, detail="slides required")
+
+    os.makedirs(VIDEOS_DIR, exist_ok=True)
+    slides = [s.model_dump() for s in body.slides]
+
+    ltx_key = os.environ.get("LTX_API_KEY", "").strip()
+    filepath = None
+    engine = "slideshow-fallback"
+
+    if ltx_key:
+        try:
+            from video_engines.ltx_engine.wrapper import generate_ltx_video
+            filepath, engine = generate_ltx_video(slides, VIDEOS_DIR, ltx_key)
+            log.info("LTX-2.3 succeeded for topic: %s", body.topic)
+        except Exception as exc:
+            log.warning(
+                "LTX-2.3 failed for topic '%s', falling back to slideshow: %s",
+                body.topic, exc,
+            )
+            filepath = None
+    else:
+        log.info("LTX_API_KEY not set — using slideshow fallback for topic: %s", body.topic)
+
+    if filepath is None:
+        try:
+            from video_engines.slideshow_engine.wrapper import generate_slideshow_video
+            filepath, engine = generate_slideshow_video(slides, VIDEOS_DIR)
+            log.info("Slideshow fallback succeeded for topic: %s", body.topic)
+        except Exception as exc:
+            log.error("Slideshow engine also failed for topic '%s': %s", body.topic, exc)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Video generation failed: {exc}",
+            )
+
+    return BuildResponse(filename=os.path.basename(filepath), engine=engine)
+
+
+# ── POST /video/generate  (authenticated, external clients) ───────────────────
+
 def _use_mock() -> bool:
     return get_supabase() is None
 
-
-# ── POST /video/generate ──────────────────────────────────────────────────────
 
 @router.post("/generate", response_model=VideoGenerateResponse)
 async def generate_video(
@@ -34,7 +110,6 @@ async def generate_video(
     if not body.topic or not body.topic.strip():
         raise HTTPException(status_code=400, detail="Topic cannot be empty")
 
-    # Mock video generation — replace with real AI pipeline when ready
     import random
     video_id = str(uuid.uuid4())
     video_url = random.choice(MOCK_VIDEO_URLS)
