@@ -1,122 +1,134 @@
 """
-wrapper.py — callable interface for the slideshow engine (zero-cost fallback).
+wrapper.py — integrates the uploaded FFmpeg slideshow engine with /video/build.
 
-generate_slideshow_video(slides, output_dir) -> (filepath, "slideshow-fallback")
-
-Keeps video_builder.py / audio.py / tts.py completely untouched —
-sys.path is patched just for the duration of the import so their bare
-'from tts import …' / 'from video_builder import …' lines resolve correctly.
+Mirrors the pipeline from the uploaded main.py POST /videos endpoint exactly:
+  1. Load PIL images (from URLs instead of file uploads)
+  2. Build spec dict and parse via VideoSpec.from_dict()  ← same as uploaded main.py
+  3. build_video(pil_images, video_spec, silent_path)      ← same call
+  4. add_narration(silent, narrations, durations, out)     ← same call
+  5. Return (output_filepath, "slideshow-fallback")
 """
+
 import io
 import logging
 import os
-import shutil
 import sys
 import tempfile
 import uuid
+from pathlib import Path
 
 import httpx
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 
 log = logging.getLogger(__name__)
 
 _ENGINE_DIR = os.path.abspath(os.path.dirname(__file__))
 
 
-def _download_image(url: str, timeout: int = 12) -> Image.Image | None:
+def _fetch_image(url: str) -> Image.Image | None:
+    """Download an image from a URL and return as a PIL Image, or None on failure."""
     try:
-        r = httpx.get(url, timeout=timeout, follow_redirects=True)
+        r = httpx.get(url, timeout=12, follow_redirects=True)
         r.raise_for_status()
-        return Image.open(io.BytesIO(r.content)).convert("RGB")
-    except Exception as e:
-        log.warning("Image download failed %s: %s", url, e)
+        img = Image.open(io.BytesIO(r.content))
+        img.load()
+        return img.convert("RGB")
+    except (httpx.HTTPError, UnidentifiedImageError, OSError) as exc:
+        log.warning("Image fetch failed %s — %s", url, exc)
         return None
 
 
-def _placeholder(width: int = 1280, height: int = 720) -> Image.Image:
-    return Image.new("RGB", (width, height), color=(20, 20, 35))
+def _blank_image(width: int = 1280, height: int = 720) -> Image.Image:
+    """Dark placeholder used when no URL resolves to a valid image."""
+    return Image.new("RGB", (width, height), (18, 18, 28))
 
 
 def generate_slideshow_video(slides: list, output_dir: str) -> tuple:
     """
-    slides: list of dicts with keys:
-        narration   (str)        — spoken narration text
-        image_urls  (list[str])  — ordered image URLs; first valid one is used
-        duration    (float)      — slide length in seconds
-        heading     (str)        — text overlay at the top of the slide
-
-    output_dir: directory to write the final .mp4
-
+    slides: list of dicts — {narration, image_urls, duration, heading}
+    output_dir: directory to write the final .mp4 file
     Returns: (output_filepath, "slideshow-fallback")
     """
     os.makedirs(output_dir, exist_ok=True)
-    output_path = os.path.join(output_dir, f"{uuid.uuid4().hex}.mp4")
-    silent_path = os.path.join(tempfile.gettempdir(), f"silent_{uuid.uuid4().hex}.mp4")
 
+    # Patch sys.path so the uploaded files can resolve each other's bare imports
+    # (audio.py does `from tts import synth_to_wav`, etc.)
     sys.path.insert(0, _ENGINE_DIR)
     try:
-        from video_builder import VideoSpec, SlideSpec, TextOverlay, build_video
-        from audio import add_narration
+        from video_builder import VideoSpec, build_video  # uploaded file — not modified
+        from audio import add_narration                    # uploaded file — not modified
 
         W, H, FPS = 1280, 720, 30
 
+        # ── 1. Download images — one per slide (first working URL wins) ──────
         pil_images: list[Image.Image] = []
         for s in slides:
             img = None
             for url in (s.get("image_urls") or []):
-                img = _download_image(url)
+                img = _fetch_image(url)
                 if img:
                     break
-            pil_images.append(img or _placeholder(W, H))
+            pil_images.append(img or _blank_image(W, H))
 
-        slide_specs: list[SlideSpec] = []
+        # ── 2. Build spec dict and parse via VideoSpec.from_dict() ───────────
+        # This is exactly how the uploaded main.py constructs the spec.
+        raw_slides = []
         for i, s in enumerate(slides):
             heading = (s.get("heading") or "").strip()
-            texts = []
+            slide_entry: dict = {
+                "image_index": i,
+                "duration": float(s.get("duration", 10.0)),
+            }
             if heading:
-                texts.append(
-                    TextOverlay(
-                        text=heading,
-                        position="top",
-                        font_size=44,
-                        color="#FFFFFF",
-                        background="#00000099",
-                        margin=32,
-                    )
-                )
-            slide_specs.append(
-                SlideSpec(
-                    image_index=i,
-                    duration=float(s.get("duration", 10.0)),
-                    texts=texts,
-                )
-            )
+                # Use the `texts` list format so we can control position/style,
+                # matching the TextOverlay.from_dict() path in the uploaded video_builder.py
+                slide_entry["texts"] = [
+                    {
+                        "text": heading,
+                        "position": "top",
+                        "font_size": 44,
+                        "color": "#FFFFFF",
+                        "background": "#00000099",
+                        "margin": 32,
+                    }
+                ]
+            raw_slides.append(slide_entry)
 
-        spec = VideoSpec(
-            width=W,
-            height=H,
-            fps=FPS,
-            default_duration=10.0,
-            slides=slide_specs,
-        )
+        spec_dict = {
+            "width": W,
+            "height": H,
+            "fps": FPS,
+            "default_duration": 10.0,
+            "slides": raw_slides,
+        }
 
-        build_video(pil_images, spec, silent_path)
+        # VideoSpec.from_dict() validates the spec exactly as in the uploaded main.py
+        video_spec = VideoSpec.from_dict(spec_dict, num_images=len(pil_images))
 
-        narrations = [s.get("narration", "") for s in slides]
-        durations = [float(s.get("duration", 10.0)) for s in slides]
+        # ── 3. Pull narrations aligned to spec.slides (same as uploaded main.py) ─
+        narrations = [s.get("narration") or None for s in slides]
+        durations = [s.duration for s in video_spec.slides]
         has_audio = any(n and n.strip() for n in narrations)
 
+        # ── 4. Render silent video — identical call to the uploaded main.py ───
+        tmp = Path(tempfile.gettempdir())
+        silent_path = tmp / f"silent_{uuid.uuid4().hex}.mp4"
+        out_path = Path(output_dir) / f"{uuid.uuid4().hex}.mp4"
+
+        build_video(pil_images, video_spec, str(silent_path))
+
+        # ── 5. Mux narration audio — identical call to the uploaded main.py ──
         if has_audio:
-            add_narration(silent_path, narrations, durations, output_path)
+            add_narration(str(silent_path), narrations, durations, str(out_path))
             try:
-                os.unlink(silent_path)
-            except OSError:
+                silent_path.unlink(missing_ok=True)
+            except Exception:
                 pass
         else:
-            shutil.move(silent_path, output_path)
+            silent_path.rename(out_path)
 
-        log.info("Slideshow engine wrote: %s", output_path)
-        return output_path, "slideshow-fallback"
+        log.info("Slideshow engine wrote %s", out_path)
+        return str(out_path), "slideshow-fallback"
 
     finally:
         try:
