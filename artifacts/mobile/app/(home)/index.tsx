@@ -60,11 +60,22 @@ export default function HomeScreen() {
     try {
       const domain = process.env.EXPO_PUBLIC_DOMAIN;
       const baseUrl = domain ? `https://${domain}` : "";
-      const res = await fetch(`${baseUrl}/api/video/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ topic: t }),
-      });
+
+      // Video generation downloads real footage and encodes — allow up to 5 minutes
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5 * 60 * 1000);
+
+      let res: Response;
+      try {
+        res = await fetch(`${baseUrl}/api/video/generate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ topic: t }),
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
