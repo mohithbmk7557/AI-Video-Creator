@@ -1,0 +1,75 @@
+Implement the following three features in this order. Do not modify any unrelated existing code.
+
+================================================
+FEATURE 1 — REPLACE VIDEO GENERATION WITH LTX-2.3 (OPEN SOURCE, AUDIO+VIDEO IN ONE PASS)
+================================================
+
+Remove the current image-based slideshow generation completely (no static images stitched with FFmpeg, no separate audio-then-video merge step).
+
+Replace it with LTX-2.3, an open-source model that generates audio and video together in a single pass, eliminating sync issues at the source.
+
+Backend changes:
+- Use a hosted inference API for LTX-2.3 (e.g. Fal.ai or SiliconFlow) so no local GPU provisioning is required for now. Use environment variable LTX_API_KEY for authentication.
+- The /video/generate endpoint should:
+  1. Accept the user's topic from the request
+  2. Generate a 59-second educational script (reuse existing script generation logic if present, otherwise call GPT-4o or Claude API)
+  3. Split the script into clip-sized segments matching LTX-2.3's native output length (5-10 seconds per clip)
+  4. Call the LTX-2.3 API once per segment, passing the script text for that segment so audio and video are generated together with built-in sync
+  5. Poll each clip generation job until complete
+  6. Use FFmpeg only to concatenate the already-synced clips into one continuous video (do NOT use FFmpeg to merge separate audio and video tracks — that step is no longer needed)
+  7. Return the final video URL to the frontend
+- Update requirements.txt and add LTX_API_KEY to environment variables
+- Remove all old slideshow-generation and separate-audio-merge code paths completely, no fallback to the broken method
+- Test by generating a 59-second video for the topic "Photosynthesis" and confirm the output is real motion video with audio embedded and synced from generation, not stitched afterward
+
+================================================
+FEATURE 2 — USER PROFILE SYSTEM
+================================================
+
+A. SIGN UP SCREEN — add these fields:
+- Full Name (keep existing)
+- Username (new, unique, lowercase, no spaces)
+- Date of Birth (date picker)
+- Phone Number (optional)
+- Profile Picture upload (optional, default placeholder avatar if skipped)
+
+B. BACKEND — extend the user table to store:
+full_name, username, email, date_of_birth, phone_number, profile_picture_url, created_at
+- Add GET /user/profile to fetch current user's profile
+- Add PUT /user/profile to update profile fields
+
+C. PROFILE ICON IN APP BAR:
+- Circular profile icon, top-left corner of the Home/Chat screen app bar, 36x36px
+- Show uploaded profile picture if present, cropped to fit the circle
+- If no picture uploaded, show the user's initials (first letter of full name) with the app's primary color (#3D35A8) as background
+- Tapping the icon opens a Profile Screen showing: profile picture, full name, username, email, date of birth, phone number, and an "Edit Profile" button
+- Edit Profile opens a pre-filled form, saving changes via PUT /user/profile
+
+================================================
+FEATURE 3 — FIX LOGIN SCREEN: ADD MISSING "FORGOT PASSWORD" OPTION
+================================================
+
+- Add a "Forgot Password?" clickable text link directly below the password field on the Login screen
+- Tapping it navigates to a new Forgot Password screen with:
+  - Email input field
+  - "Send Reset Link" button
+  - On success, show confirmation message: "Check your email for a reset link"
+  - Back arrow to return to Login screen
+- Backend: add POST /auth/forgot-password endpoint that triggers a password reset email via Supabase Auth (or existing auth provider)
+
+================================================
+ADDITIONAL UI POLISH (RECOMMENDED)
+================================================
+
+- Add a subtle loading skeleton or progress bar on the Home screen while a video is generating, since LTX-2.3 multi-clip generation takes longer than instant — show estimated time remaining if the API provides job status
+- Add a small toast/snackbar notification when video generation completes, even if the user has navigated away from the chat screen
+- Add input validation on Sign Up: real-time username availability check, password strength indicator, and email format validation before submission
+- Add a "Resend reset email" option on the Forgot Password screen if no email arrives within 60 seconds
+- On the Profile screen, add a "Change Password" option separate from Edit Profile, requiring current password confirmation before allowing a new one
+
+DESIGN RULES (keep consistent across all new screens):
+- White background, rounded corners (radius 12), primary color #3D35A8
+- Font: default Flutter sans-serif, clean and minimal, no gradients or heavy shadows
+- Use flutter_secure_storage for JWT, http package for API calls, image_picker for profile picture upload, intl for date formatting
+
+Implement Feature 1 first and confirm it works end-to-end, then Feature 2, then Feature 3, then the additional polish items.
