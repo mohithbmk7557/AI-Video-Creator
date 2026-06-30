@@ -15,7 +15,7 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-app.listen(port, (err) => {
+const server = app.listen(port, (err) => {
   if (err) {
     logger.error({ err }, "Error listening on port");
     process.exit(1);
@@ -23,3 +23,8 @@ app.listen(port, (err) => {
 
   logger.info({ port }, "Server listening");
 });
+
+// Video generation downloads real footage and encodes — allow up to 6 minutes.
+// Default Node.js socket timeout (2 minutes) would kill in-flight generation requests.
+server.setTimeout(6 * 60 * 1000);
+server.keepAliveTimeout = 6 * 60 * 1000;
